@@ -16,7 +16,7 @@ export function loadApiKey(): string | undefined {
   const searchPaths = [
     path.join(cwd, '.env'),
     path.join(cwd, '.getitrc'),
-    path.join(homeDir, '.getitrc'),
+    ...(process.env.GETIT_TEST_MODE === 'true' ? [] : [path.join(homeDir, '.getitrc')]),
   ];
 
   for (const filePath of searchPaths) {

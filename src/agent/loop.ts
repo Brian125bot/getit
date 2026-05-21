@@ -1,6 +1,8 @@
 import { sendChatRequest, ChatMessage } from './client.js';
 import { toolSchemas } from './tools.js';
 import { dispatchToolCall } from '../tools/registry.js';
+import { getRuntimeSession, startPromptTransaction } from '../runtime/session.js';
+import { scrubText } from '../security/scrubber.js';
 
 export class AgentLoop {
   private messages: ChatMessage[] = [];
@@ -50,6 +52,8 @@ export class AgentLoop {
   }
 
   public async runTurn(userInput: string): Promise<void> {
+    startPromptTransaction();
+
     // 0. Stage 3 Test Mocking (restricted to test environment mode)
     if (process.env.GETIT_TEST_MODE === 'true') {
       if (userInput.includes('Remember token "TEST_KEY_VALID"')) {
@@ -62,9 +66,11 @@ export class AgentLoop {
         this.messages.push({ role: 'user', content: userInput });
         this.messages.push({ role: 'assistant', content: 'TEST_KEY_VALID' });
         process.stdout.write('\x1b[32mgetit-assistant ❯ \x1b[0mThe token is TEST_KEY_VALID\n');
-        setTimeout(() => {
-          process.exit(0);
-        }, 100);
+        if (process.env.GETIT_DISABLE_TEST_EXIT !== 'true') {
+          setTimeout(() => {
+            process.exit(0);
+          }, 100);
+        }
         return;
       }
     }
@@ -92,12 +98,14 @@ export class AgentLoop {
       try {
         // Output streaming token-by-token for smooth UX
         process.stdout.write('\x1b[32mgetit-assistant ❯ \x1b[0m');
+        const session = getRuntimeSession();
         
         const response = await sendChatRequest(
           this.messages,
           toolSchemas,
           (token) => {
-            process.stdout.write(token);
+            const safeToken = scrubText(token, session.maskingSession);
+            process.stdout.write(safeToken);
           }
         );
         console.log(); // end of assistant stream line

@@ -1,4 +1,6 @@
 import { loadApiKey } from '../security/secrets-loader.js';
+import { scrubText } from '../security/scrubber.js';
+import { getRuntimeSession } from '../runtime/session.js';
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -70,7 +72,7 @@ export async function sendChatRequest(
   if (!response.ok) {
     const errText = await response.text();
     // Sanitize the errText to ensure API keys are not echoed in logs
-    const cleanErrText = errText.replace(new RegExp(apiKey, 'g'), 'sk-***');
+    const cleanErrText = scrubText(errText.replace(new RegExp(apiKey, 'g'), 'sk-***'), getRuntimeSession().maskingSession);
     throw new Error(`OpenRouter API Request failed with status ${response.status}: ${cleanErrText}`);
   }
 

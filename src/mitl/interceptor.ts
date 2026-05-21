@@ -1,5 +1,7 @@
 import * as readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
+import { getRuntimeSession } from '../runtime/session.js';
+import { scrubText } from '../security/scrubber.js';
 
 let rlInstance: readline.Interface | null = null;
 
@@ -34,12 +36,23 @@ export async function interceptToolCall(
     return { approved: true, payload };
   }
 
+  const session = getRuntimeSession();
+  if (session.suppressMitl) {
+    return { approved: true, payload };
+  }
+  if (session.processActive) {
+    return { approved: false, payload, reason: 'Cannot prompt for approval while a child process is actively streaming.' };
+  }
+  session.mitlActive = true;
+
   const rl = getReadlineInterface();
 
-  // Clear previous terminal block / draw some spacing
-  console.log('\n');
+  try {
+    // Clear previous terminal block / draw some spacing
+    console.log('\n');
 
-  const lines = payload.split('\n');
+  const displayPayload = scrubText(payload, session.maskingSession);
+  const lines = displayPayload.split('\n');
   const payloadWidth = Math.max(context.length + 8, ...lines.map(l => l.length)) + 4;
   const cardWidth = Math.min(80, Math.max(40, payloadWidth));
 
@@ -99,5 +112,8 @@ export async function interceptToolCall(
     } else {
       console.log('\x1b[1;31mInvalid input. Please enter "y", "n", or "e".\x1b[0m');
     }
+  }
+  } finally {
+    session.mitlActive = false;
   }
 }

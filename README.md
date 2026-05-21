@@ -1,6 +1,6 @@
 # getit ❯ Stateful, Man-in-the-Loop Terminal Workspace Agent
 
-`getit` is a lightweight, Man-in-the-Loop (MITL), terminal-native workspace assistant designed to run statefully inside a ChromeOS Linux container (Crostini Debian). It translates natural language intents into atomic system manipulations: discovering, downloading, installing, and updating software, as well as surgically editing system configuration files.
+`getit` is a lightweight, Man-in-the-Loop (MITL), terminal-native workspace assistant designed to run statefully inside Unix-like terminals across Linux and macOS. It translates natural language intents into atomic system manipulations: discovering, downloading, installing, and updating software, as well as surgically editing system configuration files. Debian/Crostini remains a first-class tested environment.
 
 Built completely from scratch in TypeScript (Node.js) with **zero production dependencies**, `getit` serves as a deterministic, secure supervisor over your terminal shell.
 
@@ -41,10 +41,11 @@ To shield your host machine from untrusted web payloads (such as malicious repos
 └────────────────────────────────────────────────────────┘
 ```
 
-* **Banned Path Vectors**: Any tool interaction targeted at `~/.ssh/`, `/etc/`, `/boot/`, `/dev/`, `/proc/`, `/sys/`, `/root/`, or the root `/` will fail immediately with a safety exception.
-* **Secrets Containment**: Before running any child process, the active environment is scrubbed of sensitive secrets (including `OPENROUTER_API_KEY`, `GITHUB_TOKEN`, and any key matching the pattern `SECRET`, `PASSWORD`, or `TOKEN`).
+* **Policy-Gated Paths**: Any tool interaction targeted at catastrophic system paths, default protected areas, global policy rules, or local `.getitignore` patterns fails immediately with a safety exception. Reads and writes are both blocked.
+* **Secrets Containment**: Before running any child process or sending tool history back to the model, the active environment and logs are scrubbed of sensitive secrets. Repeated secrets are mapped consistently as `[REDACTED_N]`.
 * **Input Sanitization**: Detects dangerous shell cascades (`&&`, `||`, `;`), subshells (`$()`, backticks), and output redirects (`>`, `>>`), issuing visual safety warnings to the user before prompt approval.
 * **Fail-Closed Guarantee**: If a command exits with a non-zero status code, the program instantly halts the multi-turn loop, blocking automatic AI recovery attempts until you manually authorize a next step.
+* **Ledger-Backed Undo**: File mutations are snapshotted under the XDG state directory before writes. `getit undo` restores the latest transaction batch and warns when a batch also included non-restorable commands.
 
 ---
 
@@ -64,7 +65,8 @@ Prompts with exactly `[Y/n/e]`:
 ### Stage 2: Ambient Environment Discovery
 Runs once synchronously upon agent startup:
 - CPU Architecture mapping (`x64` to `x86_64`, `arm64` to `arm64/aarch64`).
-- Binary check status (`curl`, `tar`, `unzip`, `apt-get`).
+- Binary check status (`curl`, `tar`, `unzip`, and the detected package manager).
+- Package manager mapping for Debian/Ubuntu (`apt-get`), macOS (`brew`), Fedora/RHEL (`dnf`), and Arch (`pacman`).
 - `$PATH` verification to see if the user local binaries path `~/.local/bin` is active.
 - Appends this environment context dynamically to the base OpenRouter system prompt.
 
@@ -79,6 +81,12 @@ Enforces non-destructive configuration file patching:
 - Renders colored diff cards in the terminal above the MITL card:
   - Deletions in **Red** ANSI formatting (`\x1b[31m- `).
   - Additions in **Green** ANSI formatting (`\x1b[32m+ `).
+
+### Phase 2: Async, Policy, Undo, and Dry-Run
+- Bash execution uses asynchronous `spawn` streaming with stdout/stderr truncation before model-history insertion.
+- `.getitignore` and `$XDG_CONFIG_HOME/getit/policy.json` provide project and global path policy.
+- `--dry-run` captures native model tool calls into a roadmap. Approving the roadmap batch-authorizes the listed mutations.
+- `getit undo` restores the latest file transaction batch from the native JSON ledger and snapshot store.
 
 ---
 
@@ -137,6 +145,15 @@ Alternatively, you can run in development/compilation mode inside the project di
 ```bash
 npm run dev
 ```
+
+Phase 2 command additions:
+```bash
+getit --dry-run "install ripgrep and update my shell path"
+getit --profile strict
+getit undo
+```
+
+Inside the REPL, `/undo`, `/dry-run on`, `/dry-run off`, and `/policy` are handled as local slash commands rather than being sent to the model.
 
 Once loaded, you will see a system dashboard and a custom prompt:
 ```text

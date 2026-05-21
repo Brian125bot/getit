@@ -1,11 +1,13 @@
-import { execSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
 import { getSafeEnv } from '../security/env-scrubber.js';
 import { sanitizeBashCommand } from '../security/input-sanitizer.js';
 import { interceptToolCall } from '../mitl/interceptor.js';
-import { assertPathSafe, resolveRealPath } from '../security/banned-paths.js';
+import { assertPathAllowed, resolveRealPath } from '../security/path-policy.js';
+import { executeCommandAsync } from '../execution/async-process.js';
+import { recordCommand } from '../backup/shadow-store.js';
 
 // Stateful working directory tracking across asynchronous turns
 let activeCwd = process.cwd();
@@ -29,7 +31,7 @@ export function setActiveCwd(newCwd: string): void {
     : path.resolve(newCwd);
   
   const realCwd = resolveRealPath(resolved);
-  assertPathSafe(realCwd);
+  assertPathAllowed(realCwd);
 
   if (fs.existsSync(realCwd) && fs.statSync(realCwd).isDirectory()) {
     activeCwd = realCwd;
@@ -41,6 +43,8 @@ export function setActiveCwd(newCwd: string): void {
 export interface BashExecutionResult {
   stdout: string;
   stderr: string;
+  contextStdout?: string;
+  contextStderr?: string;
   exitCode: number;
   haltTurn: boolean;
   error?: string;
@@ -51,7 +55,7 @@ export async function executeBash(command: string, workingDirectory?: string): P
   if (workingDirectory) {
     try {
       const realWorkingDir = resolveRealPath(workingDirectory);
-      assertPathSafe(realWorkingDir);
+      assertPathAllowed(realWorkingDir);
       setActiveCwd(realWorkingDir);
     } catch (e: any) {
       return {
@@ -119,40 +123,33 @@ export async function executeBash(command: string, workingDirectory?: string): P
   // 4. Secrets containment: Execute with sanitized environment
   const safeEnv = getSafeEnv();
   
-  try {
-    const stdoutBuffer = execSync(approvedCommand, {
-      cwd: currentDir,
-      env: safeEnv,
-      shell: '/bin/bash',
-      stdio: 'pipe', // capture both stdout and stderr
-      timeout: defaultTimeout,
-      maxBuffer: 10 * 1024 * 1024 // 10MB limit to prevent process OOM
-    });
+  const result = await executeCommandAsync(approvedCommand, {
+    cwd: currentDir,
+    env: safeEnv,
+    timeoutMs: defaultTimeout
+  });
 
-    const stdout = stdoutBuffer.toString('utf-8');
+  recordCommand(approvedCommand, currentDir, result.exitCode);
+
+  if (result.exitCode === 0 && !result.timedOut && !result.error) {
     return {
-      stdout,
-      stderr: '',
+      stdout: result.stdout,
+      stderr: result.stderr,
+      contextStdout: result.contextStdout,
+      contextStderr: result.contextStderr,
       exitCode: 0,
       haltTurn: false
     };
-  } catch (error: any) {
-    const stderr = error.stderr ? error.stderr.toString('utf-8') : '';
-    const stdout = error.stdout ? error.stdout.toString('utf-8') : '';
-    const exitCode = error.status !== undefined ? error.status : 1;
-    let errMsg = error.message || '';
-
-    if (error.code === 'ETIMEDOUT') {
-      errMsg = `Command execution timed out after ${defaultTimeout}ms.`;
-    }
-
-    // Fail-Closed: Halts the agent turn immediately, blocking automatic AI recovery
-    return {
-      stdout,
-      stderr,
-      exitCode,
-      haltTurn: true,
-      error: `${errMsg}. Stderr: ${stderr}`
-    };
   }
+
+  const errMsg = result.error || `Command exited with code ${result.exitCode}.`;
+  return {
+    stdout: result.stdout,
+    stderr: result.stderr,
+    contextStdout: result.contextStdout,
+    contextStderr: result.contextStderr,
+    exitCode: result.exitCode,
+    haltTurn: true,
+    error: `${errMsg}. Stderr: ${result.contextStderr || result.stderr}`
+  };
 }

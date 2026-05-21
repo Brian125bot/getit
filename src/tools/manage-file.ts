@@ -1,8 +1,11 @@
-import * as fs from 'node:fs';
+import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
-import { assertPathSafe, resolvePath } from '../security/banned-paths.js';
+import { assertPathAllowed, resolveRealPath } from '../security/path-policy.js';
 import { interceptToolCall } from '../mitl/interceptor.js';
 import { generateDiffPreview } from './diff.js';
+import { snapshotBeforeWrite } from '../backup/shadow-store.js';
+import { getRuntimeSession } from '../runtime/session.js';
+import { scrubText } from '../security/scrubber.js';
 
 export interface FileOperationResult {
   success: boolean;
@@ -22,24 +25,24 @@ export async function manageFile(
   replace?: string
 ): Promise<FileOperationResult> {
   try {
-    const resolvedPath = resolvePath(filePath);
+    const resolvedPath = resolveRealPath(filePath);
     
     // 1. Safety check
-    assertPathSafe(resolvedPath);
+    assertPathAllowed(resolvedPath);
 
     if (action === 'read') {
-      if (!fs.existsSync(resolvedPath)) {
+      if (!(await pathExists(resolvedPath))) {
         return { success: false, error: `File not found: ${filePath}` };
       }
-      const stats = fs.statSync(resolvedPath);
+      const stats = await fsp.stat(resolvedPath);
       if (stats.size > 50 * 1024 * 1024) {
         return { success: false, error: `File is too large (${(stats.size / 1024 / 1024).toFixed(2)}MB). Max supported size is 50MB.` };
       }
-      const fileContent = fs.readFileSync(resolvedPath, 'utf-8');
+      const fileContent = await fsp.readFile(resolvedPath, 'utf-8');
       const lines = fileContent.split(/\r?\n/).length;
       return {
         success: true,
-        content: fileContent,
+        content: scrubText(fileContent, getRuntimeSession().maskingSession),
         metadata: {
           size: stats.size,
           lines
@@ -54,7 +57,7 @@ export async function manageFile(
 
       // Ensure containing directory path is safe
       const dirName = path.dirname(resolvedPath);
-      assertPathSafe(dirName);
+      assertPathAllowed(dirName);
 
       // Stage 1: MITL Gate
       const mitlResult = await interceptToolCall('FILE CREATE', content);
@@ -63,12 +66,13 @@ export async function manageFile(
       }
 
       // Ensure containing directory exists (defer until approved)
-      if (!fs.existsSync(dirName)) {
-        fs.mkdirSync(dirName, { recursive: true });
+      if (!(await pathExists(dirName))) {
+        await fsp.mkdir(dirName, { recursive: true });
       }
 
       const finalContent = mitlResult.payload;
-      fs.writeFileSync(resolvedPath, finalContent, 'utf-8');
+      snapshotBeforeWrite(resolvedPath, 'file_create');
+      await atomicWriteFile(resolvedPath, finalContent);
 
       return {
         success: true,
@@ -84,11 +88,11 @@ export async function manageFile(
         return { success: false, error: 'Mandatory fields "search" and "replace" missing for "patch" action.' };
       }
 
-      if (!fs.existsSync(resolvedPath)) {
+      if (!(await pathExists(resolvedPath))) {
         return { success: false, error: `File to patch not found: ${filePath}` };
       }
 
-      const existingContent = fs.readFileSync(resolvedPath, 'utf-8');
+      const existingContent = await fsp.readFile(resolvedPath, 'utf-8');
 
       // Verify search block exists uniquely
       const occurrences = existingContent.split(search).length - 1;
@@ -126,7 +130,8 @@ export async function manageFile(
         finalContent = mitlResult.payload;
       }
 
-      fs.writeFileSync(resolvedPath, finalContent, 'utf-8');
+      snapshotBeforeWrite(resolvedPath, 'file_patch');
+      await atomicWriteFile(resolvedPath, finalContent);
 
       return {
         success: true,
@@ -140,5 +145,20 @@ export async function manageFile(
     return { success: false, error: `Unknown action: ${action}` };
   } catch (error: any) {
     return { success: false, error: error.message };
+  }
+}
+
+async function atomicWriteFile(filePath: string, content: string): Promise<void> {
+  const tempPath = `${filePath}.getit-tmp-${process.pid}-${Date.now()}`;
+  await fsp.writeFile(tempPath, content, 'utf-8');
+  await fsp.rename(tempPath, filePath);
+}
+
+async function pathExists(targetPath: string): Promise<boolean> {
+  try {
+    await fsp.access(targetPath);
+    return true;
+  } catch {
+    return false;
   }
 }

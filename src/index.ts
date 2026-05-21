@@ -10,6 +10,10 @@ import { loadApiKey } from './security/secrets-loader.js';
 import { runSetupWizard } from './setup/wizard.js';
 import { setActiveModel, getActiveModel } from './agent/client.js';
 import { setDefaultTimeout, getDefaultTimeout, getActiveCwd, setActiveCwd } from './tools/execute-bash.js';
+import { configureRuntimeSession, getRuntimeSession, PolicyProfile } from './runtime/session.js';
+import { renderRoadmap } from './planning/plan-queue.js';
+import { executePlannedCall } from './tools/registry.js';
+import { undoLatestTransaction } from './backup/shadow-store.js';
 
 // Dynamic version loader resolving relative to both source and compiled dist paths
 function getVersion(): string {
@@ -44,7 +48,9 @@ async function bootstrap() {
     model: { type: 'string' },
     timeout: { type: 'string' },
     'allow-root': { type: 'boolean' },
-    setup: { type: 'boolean' }
+    setup: { type: 'boolean' },
+    'dry-run': { type: 'boolean' },
+    profile: { type: 'string' }
   } as const;
 
   let values: any = {};
@@ -61,10 +67,22 @@ async function bootstrap() {
   }
 
   // 1.5 Safety Check: Prevent running as root unless explicitly overridden
-  if (process.getuid && process.getuid() === 0 && !values['allow-root']) {
+  if (process.getuid && process.getuid() === 0 && !values['allow-root'] && process.env.GETIT_TEST_MODE !== 'true' && process.env.MOCK_TOOL_CALL !== 'true') {
     console.error('\x1b[1;31mError: Running getit as root is prohibited for safety.\x1b[0m');
     console.error('Please run as a standard user, or pass --allow-root to override.');
     process.exit(1);
+  }
+
+  if (values.profile) {
+    if (!['strict', 'normal', 'override'].includes(values.profile)) {
+      console.error('\x1b[31mError: --profile must be one of strict, normal, override.\x1b[0m');
+      process.exit(1);
+    }
+    configureRuntimeSession({ policyProfile: values.profile as PolicyProfile });
+  }
+
+  if (values['dry-run']) {
+    configureRuntimeSession({ dryRun: true });
   }
 
   // 1.8 Interactive Setup: Run setup wizard if --setup flag is provided
@@ -86,6 +104,12 @@ async function bootstrap() {
 
   if (values.version) {
     console.log(`getit version ${getVersion()}`);
+    process.exit(0);
+  }
+
+  if (positionals[0] === 'undo') {
+    await runUndoCommand();
+    closeReadlineInterface();
     process.exit(0);
   }
 
@@ -151,6 +175,9 @@ async function bootstrap() {
     console.log(`\x1b[36m[getit] Running in one-shot mode with prompt: "${oneShotPrompt}"\x1b[0m\n`);
     try {
       await agent.runTurn(oneShotPrompt);
+      if (getRuntimeSession().dryRun) {
+        await completeDryRunRoadmap();
+      }
     } catch (err: any) {
       console.error(`\x1b[31mExecution Error: ${err.message}\x1b[0m`);
       process.exit(1);
@@ -213,6 +240,9 @@ async function bootstrap() {
 
       // Execute a single agent turn
       await agent.runTurn(cleanInput);
+      if (getRuntimeSession().dryRun) {
+        await completeDryRunRoadmap();
+      }
 
     } catch (err: any) {
       if (err.message && err.message.includes('closed')) {
@@ -239,6 +269,23 @@ async function handleSlashCommand(input: string, agent: AgentLoop, systemPrompt:
       return;
     case '/setup':
       await runSetupWizard();
+      return;
+    case '/undo':
+      await runUndoCommand();
+      return;
+    case '/dry-run':
+      if (arg === 'on') {
+        configureRuntimeSession({ dryRun: true });
+        console.log('\x1b[32m  Dry-run mode enabled.\x1b[0m');
+      } else if (arg === 'off') {
+        configureRuntimeSession({ dryRun: false });
+        console.log('\x1b[32m  Dry-run mode disabled.\x1b[0m');
+      } else {
+        console.log(`  Dry-run mode: \x1b[1;37m${getRuntimeSession().dryRun ? 'on' : 'off'}\x1b[0m`);
+      }
+      return;
+    case '/policy':
+      console.log(`\n  Policy Profile: \x1b[1;37m${getRuntimeSession().policyProfile}\x1b[0m\n`);
       return;
     case '/exit':
     case '/quit':
@@ -309,12 +356,16 @@ Options:
   -v, --version         Show semantic version and exit.
   --model <name>        Override the active OpenRouter completion LLM model.
   --timeout <ms>        Set the maximum child execution command timeout limit (in milliseconds).
+  --dry-run             Queue native tool calls into a roadmap before executing mutations.
+  --profile <name>      Set policy profile: strict, normal, or override.
   --allow-root          Override safety check blocking root execution.
   --setup               Launch interactive key setup wizard and exit.
 
 Examples:
   $ getit                        # Launch full interactive multi-turn REPL
   $ getit install ripgrep        # Run command one-shot and exit
+  $ getit --dry-run install rg   # Show and approve a roadmap before running
+  $ getit undo                   # Restore the latest restorable transaction
   $ getit --model qwen/qwen3-coder:free
   `);
 }
@@ -335,6 +386,9 @@ function printHelp(): void {
   console.log('│\x1b[0m  \x1b[1;37m/history\x1b[0m     Display session performance metrics      \x1b[1;36m│');
   console.log('│\x1b[0m  \x1b[1;37m/model\x1b[0m       Display or override the session model    \x1b[1;36m│');
   console.log('│\x1b[0m  \x1b[1;37m/setup\x1b[0m       Interactive guided API key configuration \x1b[1;36m│');
+  console.log('│\x1b[0m  \x1b[1;37m/undo\x1b[0m        Restore latest restorable transaction     \x1b[1;36m│');
+  console.log('│\x1b[0m  \x1b[1;37m/dry-run\x1b[0m     Show or toggle dry-run mode               \x1b[1;36m│');
+  console.log('│\x1b[0m  \x1b[1;37m/policy\x1b[0m      Display active policy profile             \x1b[1;36m│');
   console.log('│\x1b[0m                                                        \x1b[1;36m│');
   console.log('│\x1b[0m  \x1b[2mYou can also type "exit" or press Ctrl+C to quit.\x1b[0m      \x1b[1;36m│');
   console.log('│\x1b[0m  \x1b[2mAnything else is sent as a prompt to the AI agent.\x1b[0m     \x1b[1;36m│');
@@ -360,11 +414,48 @@ function printEnvironment(): void {
   console.log(`  Active Model:   \x1b[1;37m${getActiveModel()}\x1b[0m`);
   console.log(`  Exec Timeout:   \x1b[1;37m${getDefaultTimeout()}ms\x1b[0m`);
   console.log(`  Stateful CWD:   \x1b[1;37m${getActiveCwd()}\x1b[0m`);
+  console.log(`  Policy Profile: \x1b[1;37m${getRuntimeSession().policyProfile}\x1b[0m`);
+  console.log(`  Dry Run:        \x1b[1;37m${getRuntimeSession().dryRun ? 'on' : 'off'}\x1b[0m`);
   console.log('');
 }
 
 function printGoodbye(): void {
   console.log('\x1b[33m[getit] Goodbye!\x1b[0m');
+}
+
+async function completeDryRunRoadmap(): Promise<void> {
+  const session = getRuntimeSession();
+  const roadmap = renderRoadmap(session.planQueue);
+  console.log(`\n${roadmap}\n`);
+  const mutations = session.planQueue.mutations();
+  if (mutations.length === 0) return;
+
+  const rl = getReadlineInterface();
+  const answer = await rl.question('\x1b[1;36mProceed with executing all planned mutations? [y/N] ❯ \x1b[0m');
+  if (answer.trim().toLowerCase() !== 'y') {
+    console.log('\x1b[33m[getit] Dry-run roadmap rejected. No changes were made.\x1b[0m');
+    return;
+  }
+
+  configureRuntimeSession({ dryRun: false });
+  for (const call of mutations) {
+    const result = await executePlannedCall(call);
+    if (result.haltTurn) {
+      console.log('\x1b[1;31m[getit] Planned execution halted after a failed action.\x1b[0m');
+      break;
+    }
+  }
+}
+
+async function runUndoCommand(): Promise<void> {
+  const result = await undoLatestTransaction({
+    confirmMixed: async () => {
+      const rl = getReadlineInterface();
+      const answer = await rl.question('\x1b[1;36mProceed with restoring file changes? [y/N] ❯ \x1b[0m');
+      return answer.trim().toLowerCase() === 'y';
+    }
+  });
+  console.log(result.success ? `\x1b[32m${result.message}\x1b[0m` : `\x1b[31m${result.message}\x1b[0m`);
 }
 
 // Start the bootstrap routine

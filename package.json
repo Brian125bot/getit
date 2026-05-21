@@ -21,7 +21,7 @@
     "start": "node dist/index.js",
     "dev": "tsc && node dist/index.js",
     "prepublishOnly": "npm run build",
-    "test": "tsc && node --test dist/tests/stage1.test.js dist/tests/stage2.test.js dist/tests/stage3.test.js dist/tests/stage4.test.js dist/tests/functionality.test.js dist/tests/safety.test.js"
+    "test": "tsc && node --test dist/tests/*.test.js"
   },
   "keywords": [
     "terminal",
