@@ -1,0 +1,22 @@
+# Source Code
+src/
+tsconfig.json
+
+# Testing
+tests/
+.nyc_output
+coverage
+
+# Environments
+.env
+.env.*
+.getitrc
+
+# Development Scratch
+scratch/
+.git/
+.github/
+.vscode/
+
+# Build caching
+*.tsbuildinfo
