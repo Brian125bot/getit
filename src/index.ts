@@ -6,7 +6,7 @@ import { getReadlineInterface, closeReadlineInterface, interceptToolCall } from 
 import { discoverEnvironment } from './discovery/environment.js';
 import { buildSystemPrompt } from './agent/prompt.js';
 import { AgentLoop } from './agent/loop.js';
-import { loadApiKey } from './security/secrets-loader.js';
+import { loadApiKey, loadConfig } from './security/secrets-loader.js';
 import { runSetupWizard } from './setup/wizard.js';
 import { setActiveModel, getActiveModel } from './agent/client.js';
 import { setDefaultTimeout, getDefaultTimeout, getActiveCwd, setActiveCwd } from './tools/execute-bash.js';
@@ -20,7 +20,7 @@ import { inspectTrackedFile, stageToTracking, getTrackingRoot, scrubContentGener
 import { checkRemoteStatus, syncWithRemote } from './workspace/remote.js';
 import { findWorkspaceRoot } from './workspace/boundary.js';
 import { generateDiffPreview } from './tools/diff.js';
-import { centerBlock, centerLine, centerPrompt } from './ui/layout.js';
+import { centerBlock, centerLine, centerPrompt, stripAnsi } from './ui/layout.js';
 
 // Dynamic version loader resolving relative to both source and compiled dist paths
 function getVersion(): string {
@@ -183,15 +183,21 @@ async function bootstrap() {
     process.exit(1);
   }
 
+  // Initialize configurations and apply defaults/overrides
+  const config = loadConfig();
+
+  let activeProfile: PolicyProfile = config.profile;
   if (values.profile) {
     if (!['strict', 'normal', 'override'].includes(values.profile)) {
       console.error('\x1b[31mError: --profile must be one of strict, normal, override.\x1b[0m');
       process.exit(1);
     }
-    configureRuntimeSession({ policyProfile: values.profile as PolicyProfile });
+    activeProfile = values.profile as PolicyProfile;
   }
+  configureRuntimeSession({ policyProfile: activeProfile });
 
-  if (values['dry-run']) {
+  const isDryRun = values['dry-run'] !== undefined ? !!values['dry-run'] : config.dryRun;
+  if (isDryRun) {
     configureRuntimeSession({ dryRun: true });
   }
 
@@ -229,8 +235,8 @@ async function bootstrap() {
 
   if (values.model) {
     setActiveModel(values.model);
-  } else if (process.env.GETIT_MODEL) {
-    setActiveModel(process.env.GETIT_MODEL);
+  } else {
+    setActiveModel(config.model);
   }
 
   if (values.timeout) {
@@ -241,6 +247,8 @@ async function bootstrap() {
       console.error('\x1b[31mError: Timeout must be a positive integer in milliseconds.\x1b[0m');
       process.exit(1);
     }
+  } else {
+    setDefaultTimeout(config.timeout);
   }
 
   // 3. Check for MOCK_TOOL_CALL (Stage 1 Test compatibility)
@@ -262,13 +270,13 @@ async function bootstrap() {
     }
   }
 
-  // 4. Load API Key — launch guided wizard if missing
-  let apiKey = loadApiKey();
-  if (!apiKey) {
+  // 4. Load API Key — launch guided wizard if missing (skip for custom if keyless)
+  let apiKey = config.apiKey;
+  if (!apiKey && config.carrier !== 'custom') {
     // If running in one-shot mode or non-interactive context, don't trigger the wizard
     if (positionals.length > 0 || !process.stdout.isTTY) {
-      console.error('\x1b[1;31mError: OPENROUTER_API_KEY is not set.\x1b[0m');
-      console.error('Please export OPENROUTER_API_KEY="your-key-here" or save it inside a .env or .getitrc file.');
+      console.error('\x1b[1;31mError: API key is not set.\x1b[0m');
+      console.error('Please export GETIT_API_KEY="your-key-here" or save it inside a .env or .getitrc file.');
       process.exit(1);
     }
     apiKey = await runSetupWizard();
@@ -429,6 +437,41 @@ async function handleSlashCommand(input: string, agent: AgentLoop, systemPrompt:
     case '/policy':
       console.log(`\n  Policy Profile: \x1b[1;37m${getRuntimeSession().policyProfile}\x1b[0m\n`);
       return;
+    case '/config': {
+      const currentConfig = loadConfig();
+      const configCardLines = [
+        `Active Carrier:  \x1b[1;37m${currentConfig.carrier}\x1b[0m`,
+        `Base API URL:    \x1b[1;37m${currentConfig.baseUrl}\x1b[0m`,
+        `Active LLM Model:\x1b[1;37m${getActiveModel()}\x1b[0m`,
+        `Exec Timeout:    \x1b[1;37m${getDefaultTimeout()}ms\x1b[0m`,
+        `Safety Profile:  \x1b[1;37m${getRuntimeSession().policyProfile}\x1b[0m`,
+        `Dry-Run Mode:    \x1b[1;37m${getRuntimeSession().dryRun ? 'enabled' : 'disabled'}\x1b[0m`,
+        `API Key:         \x1b[1;37m${currentConfig.apiKey ? '[CONFIGURED] (redacted)' : '[NOT CONFIGURED]'}\x1b[0m`,
+      ];
+      
+      const width = 58;
+      const top = `\x1b[1;36m╔${'═'.repeat(width - 2)}╗\x1b[0m`;
+      const mid = `\x1b[1;36m╟${'─'.repeat(width - 2)}╢\x1b[0m`;
+      const bot = `\x1b[1;36m╚${'═'.repeat(width - 2)}╝\x1b[0m`;
+      
+      const padCenter = (text: string, w: number): string => {
+        const visible = stripAnsi(text).length;
+        const padding = Math.floor((w - visible) / 2);
+        const left = ' '.repeat(Math.max(0, padding));
+        const right = ' '.repeat(Math.max(0, w - visible - padding));
+        return left + text + right;
+      };
+
+      const title = `\x1b[1;36m║\x1b[1;33m${padCenter('⚙  CURRENT RUNTIME OPTIONS', width - 2)}\x1b[1;36m║\x1b[0m`;
+      const formattedLines = configCardLines.map(line => {
+        const visibleLength = stripAnsi(line).length;
+        const padRight = Math.max(0, (width - 6) - visibleLength);
+        return `\x1b[1;36m║\x1b[0m  ${line}${' '.repeat(padRight)}  \x1b[1;36m║\x1b[0m`;
+      });
+      const card = [top, title, mid, ...formattedLines, bot].join('\n');
+      console.log('\n' + centerBlock(card) + '\n');
+      return;
+    }
     case '/status': {
       try {
         const drift = await detectWorkspaceDrift(process.cwd());
@@ -589,6 +632,7 @@ function printHelp(): void {
     '│\x1b[0m  \x1b[1;37m/undo\x1b[0m        Restore latest restorable transaction     \x1b[1;36m│',
     '│\x1b[0m  \x1b[1;37m/dry-run\x1b[0m     Show or toggle dry-run mode               \x1b[1;36m│',
     '│\x1b[0m  \x1b[1;37m/policy\x1b[0m      Display active policy profile             \x1b[1;36m│',
+    '│\x1b[0m  \x1b[1;37m/config\x1b[0m      Display current runtime options           \x1b[1;36m│',
     '│\x1b[0m  \x1b[1;37m/status\x1b[0m      Display workspace drift status            \x1b[1;36m│',
     '│\x1b[0m  \x1b[1;37m/resolve\x1b[0m     Interactively resolve workspace drift    \x1b[1;36m│',
     '│\x1b[0m  \x1b[1;37m/sync\x1b[0m        Synchronize tracking repo to remote       \x1b[1;36m│',

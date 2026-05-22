@@ -1,4 +1,4 @@
-import { loadApiKey } from '../security/secrets-loader.js';
+import { loadConfig } from '../security/secrets-loader.js';
 import { scrubText } from '../security/scrubber.js';
 import { getRuntimeSession } from '../runtime/session.js';
 
@@ -30,13 +30,17 @@ export async function sendChatRequest(
   tools: any[],
   onStreamToken?: (token: string) => void
 ): Promise<ChatCompletionResponse> {
-  const apiKey = loadApiKey();
+  const config = loadConfig();
+  const apiKey = config.apiKey;
   if (!apiKey) {
-    throw new Error('OPENROUTER_API_KEY is not set. Please set it in your environment or in a .env/.getitrc file.');
+    throw new Error('API key is not set. Please set it in your environment or in a .env/.getitrc file.');
   }
 
+  // Use config-defined model if the active model remains the initial historical default
+  const currentModel = activeModel === 'nvidia/nemotron-3-super-120b-a12b:free' ? config.model : activeModel;
+
   const payload = {
-    model: activeModel,
+    model: currentModel,
     messages,
     tools: tools.length > 0 ? tools : undefined,
     tool_choice: tools.length > 0 ? 'auto' : undefined,
@@ -47,22 +51,28 @@ export async function sendChatRequest(
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s request timeout
 
+  const requestUrl = `${config.baseUrl}/chat/completions`;
+  const headers: Record<string, string> = {
+    'Authorization': `Bearer ${apiKey}`,
+    'Content-Type': 'application/json',
+  };
+
+  if (config.carrier === 'openrouter') {
+    headers['HTTP-Referer'] = 'https://github.com/getit-workspace-agent';
+    headers['X-Title'] = 'GetIt Workspace Agent';
+  }
+
   let response: Response;
   try {
-    response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    response = await fetch(requestUrl, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://github.com/getit-workspace-agent',
-        'X-Title': 'GetIt Workspace Agent',
-      },
+      headers,
       body: JSON.stringify(payload),
       signal: controller.signal
     });
   } catch (err: any) {
     if (err.name === 'AbortError') {
-      throw new Error('OpenRouter API request timed out after 60 seconds.');
+      throw new Error('API request timed out after 60 seconds.');
     }
     throw err;
   } finally {
@@ -73,7 +83,7 @@ export async function sendChatRequest(
     const errText = await response.text();
     // Sanitize the errText to ensure API keys are not echoed in logs
     const cleanErrText = scrubText(errText.replace(new RegExp(apiKey, 'g'), 'sk-***'), getRuntimeSession().maskingSession);
-    throw new Error(`OpenRouter API Request failed with status ${response.status}: ${cleanErrText}`);
+    throw new Error(`API Request failed with status ${response.status}: ${cleanErrText}`);
   }
 
   if (onStreamToken && response.body) {
@@ -151,7 +161,7 @@ export async function sendChatRequest(
     const data: any = await response.json();
     const choice = data.choices?.[0];
     if (!choice) {
-      throw new Error('OpenRouter API returned an empty choices array.');
+      throw new Error('API returned an empty choices array.');
     }
     return {
       content: choice.message?.content || null,

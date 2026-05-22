@@ -51,6 +51,7 @@ test('Functionality Test Suite: Secrets Loader fallback and parser', async (t) =
   await t.test('should read from .env if present in current directory', () => {
     // Clean process.env to ensure we test file parsing
     delete process.env.OPENROUTER_API_KEY;
+    delete process.env.GETIT_API_KEY;
 
     try {
       fs.writeFileSync(testEnvFile, 'OPENROUTER_API_KEY=test_file_loaded_key\nOTHER_KEY=value', 'utf-8');
@@ -69,6 +70,7 @@ test('Functionality Test Suite: Secrets Loader fallback and parser', async (t) =
 
   await t.test('should return undefined if no environment/file is set', () => {
     delete process.env.OPENROUTER_API_KEY;
+    delete process.env.GETIT_API_KEY;
     const loaded = loadApiKey();
     assert.strictEqual(loaded, undefined);
     if (backupEnv) {

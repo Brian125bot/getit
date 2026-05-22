@@ -1,5 +1,13 @@
 const MASK_PREFIX = '[REDACTED_';
 
+const knownSecrets = new Set<string>();
+
+export function registerKnownSecret(secret: string): void {
+  if (secret && secret.trim().length >= 8) {
+    knownSecrets.add(secret.trim());
+  }
+}
+
 export class MaskingSession {
   private values = new Map<string, string>();
 
@@ -57,6 +65,16 @@ export function scrubText(text: string, session: MaskingSession = defaultSession
   if (!text) return text;
 
   let scrubbed = text;
+
+  // Mask exact registered secrets first to avoid partial replacements by other rules
+  for (const secret of knownSecrets) {
+    if (scrubbed.includes(secret)) {
+      const escaped = secret.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+      const regex = new RegExp(escaped, 'g');
+      scrubbed = scrubbed.replace(regex, (m) => session.mask(m));
+    }
+  }
+
   const replacements: Array<[RegExp, (match: string, ...groups: string[]) => string]> = [
     [/\b(sk-[A-Za-z0-9_-]{16,})\b/g, (m) => session.mask(m)],
     [/\b(ghp_[A-Za-z0-9_]{20,})\b/g, (m) => session.mask(m)],
