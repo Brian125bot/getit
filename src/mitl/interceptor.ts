@@ -2,7 +2,7 @@ import * as readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import { getRuntimeSession } from '../runtime/session.js';
 import { scrubText } from '../security/scrubber.js';
-import { getCenterPadding, centerPrompt, centerLine, centerBlock } from '../ui/layout.js';
+import { getCenterPadding, centerPrompt, centerLine, centerBlock, getBoxChars, stripAnsi } from '../ui/layout.js';
 
 let rlInstance: readline.Interface | null = null;
 let mockRlInstance: readline.Interface | null = null;
@@ -32,6 +32,37 @@ export interface InterceptionResult {
   reason?: string;
 }
 
+/**
+ * Slices a string by visible width without breaking ANSI sequences
+ */
+function sliceVisible(text: string, maxLength: number): { chunk: string; remaining: string } {
+  let visibleCount = 0;
+  let i = 0;
+  let inEscape = false;
+
+  while (i < text.length && visibleCount < maxLength) {
+    if (text[i] === '\x1b') {
+      inEscape = true;
+    }
+    if (!inEscape) {
+      visibleCount++;
+    }
+    if (inEscape && (text[i] === 'm' || (text[i] >= 'A' && text[i] <= 'Z' && text[i] !== 'O' && text[i] !== 'R'))) {
+      inEscape = false;
+    }
+    i++;
+  }
+  // Ensure we don't end in the middle of an escape sequence
+  while (inEscape && i < text.length) {
+    if (text[i] === 'm' || (text[i] >= 'A' && text[i] <= 'Z' && text[i] !== 'O' && text[i] !== 'R')) {
+      inEscape = false;
+    }
+    i++;
+  }
+
+  return { chunk: text.slice(0, i), remaining: text.slice(i) };
+}
+
 export async function interceptToolCall(
   context: 'BASH' | 'FILE CREATE' | 'FILE PATCH',
   payload: string,
@@ -58,71 +89,82 @@ export async function interceptToolCall(
     // Clear previous terminal block / draw some spacing
     console.log('\n');
 
-  const displayPayload = scrubText(payload, session.maskingSession);
-  const lines = displayPayload.split('\n');
-  const payloadWidth = Math.max(context.length + 8, ...lines.map(l => l.length)) + 4;
-  const cardWidth = Math.min(80, Math.max(40, payloadWidth));
-  const padding = ' '.repeat(getCenterPadding(cardWidth));
+    const displayPayload = scrubText(payload, session.maskingSession);
+    const lines = displayPayload.split('\n');
+    const box = getBoxChars();
 
-  const horizontalLine = '─'.repeat(cardWidth - 2);
-  
-  // RENDER CARD HEADER
-  // ANSI Colors: Yellow/Orange for header context
-  console.log(`${padding}\x1b[1;33m┌${horizontalLine}┐\x1b[0m`);
-  const headerText = `  ${context}  `;
-  const headerPadding = ' '.repeat(Math.max(0, cardWidth - 2 - headerText.length));
-  console.log(`${padding}\x1b[1;33m│\x1b[1;37m${headerText}\x1b[1;33m${headerPadding}│\x1b[0m`);
-  console.log(`${padding}\x1b[1;33m├${horizontalLine}┤\x1b[0m`);
+    // Calculate card width based on content, constrained by terminal size
+    const payloadWidth = Math.max(context.length + 8, ...lines.map(l => stripAnsi(l).length)) + 4;
+    const cardWidth = Math.min(80, Math.max(40, payloadWidth));
+    const padding = ' '.repeat(getCenterPadding(cardWidth));
 
-  // RENDER PAYLOAD
-  for (const line of lines) {
-    let currentLine = line;
-    while (currentLine.length > 0 || line.length === 0) {
-      const chunk = currentLine.slice(0, cardWidth - 6);
-      currentLine = currentLine.slice(cardWidth - 6);
-      const rightPadding = ' '.repeat(Math.max(0, cardWidth - 6 - chunk.length));
-      console.log(`${padding}\x1b[1;33m│\x1b[0m  \x1b[1;32m${chunk}\x1b[0m  ${rightPadding}\x1b[1;33m│\x1b[0m`);
-      if (line.length === 0) break;
-    }
-  }
+    const horizontalLine = box.h.repeat(cardWidth - 2);
 
-  // RENDER WARNINGS SECTION
-  if (warnings.length > 0) {
-    console.log(`${padding}\x1b[1;33m├${horizontalLine}┤\x1b[0m`);
-    console.log(`${padding}\x1b[1;33m│\x1b[1;31m  ⚠ SECURITY WARNINGS:\x1b[1;33m${' '.repeat(Math.max(0, cardWidth - 23))}│\x1b[0m`);
-    for (const warning of warnings) {
-      const formattedWarning = `  - ${warning}`;
-      const rightPadding = ' '.repeat(Math.max(0, cardWidth - 6 - formattedWarning.length));
-      console.log(`${padding}\x1b[1;33m│\x1b[0m  \x1b[31m${formattedWarning}\x1b[0m${rightPadding}  \x1b[1;33m│\x1b[0m`);
-    }
-  }
+    // RENDER CARD HEADER
+    // ANSI Colors: Yellow (\x1b[33m) for warnings/attention boxes
+    console.log(`${padding}\x1b[33m${box.tl}${horizontalLine}${box.tr}\x1b[0m`);
+    const headerText = `  ${context}  `;
+    const headerPadding = ' '.repeat(Math.max(0, cardWidth - 2 - headerText.length));
+    console.log(`${padding}\x1b[33m${box.v}\x1b[1;37m${headerText}\x1b[0m\x1b[33m${headerPadding}${box.v}\x1b[0m`);
+    console.log(`${padding}\x1b[33m${box.ml}${horizontalLine}${box.mr}\x1b[0m`);
 
-  // RENDER CARD FOOTER
-  console.log(`${padding}\x1b[1;33m└${horizontalLine}┘\x1b[0m`);
-
-  // PROMPT USER
-  while (true) {
-    const questionPrompt = centerPrompt('\x1b[1;36mApprove command? [Y/n/e] ❯ \x1b[0m');
-    const answer = await rl.question(questionPrompt);
-    const choice = answer.trim().toLowerCase();
-
-    if (choice === 'y' || choice === '') {
-      return { approved: true, payload };
-    } else if (choice === 'n') {
-      return { approved: false, payload, reason: 'Execution denied by user.' };
-    } else if (choice === 'e') {
-      if (editPayload !== undefined) {
-        console.log('\n' + centerLine('\x1b[1;33mOriginal full content to edit (copy and modify):\x1b[0m', 48));
-        console.log(centerBlock(editPayload));
-        console.log('');
+    // RENDER PAYLOAD
+    for (const line of lines) {
+      let currentLine = line;
+      if (line.length === 0) {
+          const rightPadding = ' '.repeat(cardWidth - 4);
+          console.log(`${padding}\x1b[33m${box.v}\x1b[0m  ${rightPadding}  \x1b[33m${box.v}\x1b[0m`);
+          continue;
       }
-      const editPrompt = centerPrompt('\x1b[1;36mEnter modified payload ❯ \x1b[0m');
-      const editedPayload = await rl.question(editPrompt);
-      return { approved: true, payload: editedPayload };
-    } else {
-      console.log(centerLine('\x1b[1;31mInvalid input. Please enter "y", "n", or "e".\x1b[0m', 42));
+      while (currentLine.length > 0) {
+        const { chunk, remaining } = sliceVisible(currentLine, cardWidth - 6);
+        currentLine = remaining;
+        const rightPadding = ' '.repeat(Math.max(0, cardWidth - 6 - stripAnsi(chunk).length));
+        // Use Green (\x1b[32m) for safe/executable content
+        console.log(`${padding}\x1b[33m${box.v}\x1b[0m  \x1b[32m${chunk}\x1b[0m${rightPadding}  \x1b[33m${box.v}\x1b[0m`);
+      }
     }
-  }
+
+    // RENDER WARNINGS SECTION
+    if (warnings.length > 0) {
+      console.log(`${padding}\x1b[33m${box.ml}${horizontalLine}${box.mr}\x1b[0m`);
+      console.log(`${padding}\x1b[33m${box.v}\x1b[1;31m  ⚠ SECURITY WARNINGS:\x1b[0m\x1b[33m${' '.repeat(Math.max(0, cardWidth - 23))}${box.v}\x1b[0m`);
+      for (const warning of warnings) {
+        const formattedWarning = `  - ${warning}`;
+        const { chunk } = sliceVisible(formattedWarning, cardWidth - 6); // Simple wrap for warnings too
+        const rightPadding = ' '.repeat(Math.max(0, cardWidth - 6 - stripAnsi(chunk).length));
+        console.log(`${padding}\x1b[33m${box.v}\x1b[0m  \x1b[31m${chunk}\x1b[0m${rightPadding}  \x1b[33m${box.v}\x1b[0m`);
+      }
+    }
+
+    // RENDER CARD FOOTER
+    console.log(`${padding}\x1b[33m${box.bl}${horizontalLine}${box.br}\x1b[0m`);
+
+    // PROMPT USER
+    while (true) {
+      // Use Cyan (\x1b[1;36m) for primary prompts
+      const questionPrompt = centerPrompt('\x1b[1;36mApprove command? [Y/n/e] ❯ \x1b[0m');
+      const answer = await rl.question(questionPrompt);
+      const choice = answer.trim().toLowerCase();
+
+      if (choice === 'y' || choice === '') {
+        return { approved: true, payload };
+      } else if (choice === 'n') {
+        return { approved: false, payload, reason: 'Execution denied by user.' };
+      } else if (choice === 'e') {
+        console.log('\n' + centerLine('\x1b[1;33m--- EDIT MODE ---\x1b[0m', 17));
+        if (editPayload !== undefined) {
+          console.log(centerLine('\x1b[2m(Original content shown below for reference)\x1b[0m', 44));
+          console.log(centerBlock(editPayload));
+          console.log('');
+        }
+        const editPrompt = centerPrompt('\x1b[1;36mEnter modified payload ❯ \x1b[0m');
+        const editedPayload = await rl.question(editPrompt);
+        return { approved: true, payload: editedPayload };
+      } else {
+        console.log(centerLine('\x1b[1;31mInvalid input. Please enter "y", "n", or "e".\x1b[0m', 42));
+      }
+    }
   } finally {
     session.mitlActive = false;
   }
