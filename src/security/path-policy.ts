@@ -3,6 +3,7 @@ import * as os from 'node:os';
 import * as fs from 'node:fs';
 import { evaluatePolicy } from './policy.js';
 import { getRuntimeSession, PolicyProfile } from '../runtime/session.js';
+import { findWorkspaceRoot, isPathInWorkspace } from '../workspace/boundary.js';
 
 const HOME = os.homedir();
 
@@ -65,6 +66,14 @@ export function validatePath(targetPath: string, options: { cwd?: string; profil
 
   if (resolvedPath === '/') {
     return { allowed: false, resolvedPath, reason: 'Access to root path is blocked.' };
+  }
+
+  // Enforce workspace boundary if workspace is active
+  const workspaceRoot = findWorkspaceRoot(cwd);
+  if (workspaceRoot) {
+    if (!isPathInWorkspace(resolvedPath, workspaceRoot)) {
+      return { allowed: false, resolvedPath, reason: `Path "${resolvedPath}" lies outside the active workspace boundary at "${workspaceRoot}".` };
+    }
   }
 
   for (const blocked of CATASTROPHIC_BLOCKS) {

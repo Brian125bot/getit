@@ -14,6 +14,10 @@ import { configureRuntimeSession, getRuntimeSession, PolicyProfile } from './run
 import { renderRoadmap } from './planning/plan-queue.js';
 import { executePlannedCall } from './tools/registry.js';
 import { undoLatestTransaction } from './backup/shadow-store.js';
+import { initWorkspaceManifest } from './workspace/manifest.js';
+import { detectWorkspaceDrift } from './workspace/drift.js';
+import { inspectTrackedFile } from './workspace/tracking.js';
+import { checkRemoteStatus, syncWithRemote } from './workspace/remote.js';
 
 // Dynamic version loader resolving relative to both source and compiled dist paths
 function getVersion(): string {
@@ -111,6 +115,10 @@ async function bootstrap() {
     await runUndoCommand();
     closeReadlineInterface();
     process.exit(0);
+  }
+
+  if (['manifest', 'status', 'inspect'].includes(positionals[0])) {
+    await handleWorkspaceCli(positionals, values);
   }
 
   if (values.model) {
@@ -287,6 +295,44 @@ async function handleSlashCommand(input: string, agent: AgentLoop, systemPrompt:
     case '/policy':
       console.log(`\n  Policy Profile: \x1b[1;37m${getRuntimeSession().policyProfile}\x1b[0m\n`);
       return;
+    case '/status': {
+      try {
+        const drift = await detectWorkspaceDrift(process.cwd());
+        console.log(`\n\x1b[1;36m  Workspace Offline Drift Status:\x1b[0m`);
+        console.log(`  Active Workspace Root: \x1b[1;37m${process.cwd()}\x1b[0m\n`);
+        
+        if (drift.files.length === 0) {
+          console.log(`  \x1b[33mNo candidate config files detected. Run "getit manifest init" to initialize.\x1b[0m\n`);
+        } else {
+          console.log(`  \x1b[1;37mStatus     Path\x1b[0m`);
+          console.log(`  ────────── ───────────────────────────────────────────────────`);
+          for (const file of drift.files) {
+            let statusColor = '\x1b[37m';
+            if (file.status === 'modified') statusColor = '\x1b[1;31m';
+            else if (file.status === 'missing') statusColor = '\x1b[31m';
+            else if (file.status === 'untracked') statusColor = '\x1b[1;33m';
+            else if (file.status === 'unmodified') statusColor = '\x1b[32m';
+
+            console.log(`  ${statusColor}${file.status.padEnd(10)}\x1b[0m ${file.path}`);
+          }
+          console.log('');
+        }
+      } catch (err: any) {
+        console.log(`\x1b[31m  Error: ${err.message}\x1b[0m`);
+      }
+      return;
+    }
+    case '/sync': {
+      console.log(`\n\x1b[1;36m  Initiating Secure Synchronization to Remote...\x1b[0m`);
+      const res = await syncWithRemote();
+      if (res.success) {
+        console.log(`\x1b[32m  ✓ Synchronized successfully!\x1b[0m`);
+        console.log(`  ${res.output.trim()}\n`);
+      } else {
+        console.log(`\x1b[31m  ✗ Sync failed: ${res.output}\x1b[0m\n`);
+      }
+      return;
+    }
     case '/exit':
     case '/quit':
       printGoodbye();
@@ -366,6 +412,10 @@ Examples:
   $ getit install ripgrep        # Run command one-shot and exit
   $ getit --dry-run install rg   # Show and approve a roadmap before running
   $ getit undo                   # Restore the latest restorable transaction
+  $ getit manifest init          # Initialize active local workspace
+  $ getit status                 # Check offline workspace configuration drift
+  $ getit status --remote        # Check workspace sync status against GitHub remote
+  $ getit inspect .env           # Inspect credential-redacted tracking copy of config
   $ getit --model qwen/qwen3-coder:free
   `);
 }
@@ -389,6 +439,8 @@ function printHelp(): void {
   console.log('│\x1b[0m  \x1b[1;37m/undo\x1b[0m        Restore latest restorable transaction     \x1b[1;36m│');
   console.log('│\x1b[0m  \x1b[1;37m/dry-run\x1b[0m     Show or toggle dry-run mode               \x1b[1;36m│');
   console.log('│\x1b[0m  \x1b[1;37m/policy\x1b[0m      Display active policy profile             \x1b[1;36m│');
+  console.log('│\x1b[0m  \x1b[1;37m/status\x1b[0m      Display workspace drift status            \x1b[1;36m│');
+  console.log('│\x1b[0m  \x1b[1;37m/sync\x1b[0m        Synchronize tracking repo to remote       \x1b[1;36m│');
   console.log('│\x1b[0m                                                        \x1b[1;36m│');
   console.log('│\x1b[0m  \x1b[2mYou can also type "exit" or press Ctrl+C to quit.\x1b[0m      \x1b[1;36m│');
   console.log('│\x1b[0m  \x1b[2mAnything else is sent as a prompt to the AI agent.\x1b[0m     \x1b[1;36m│');
@@ -456,6 +508,101 @@ async function runUndoCommand(): Promise<void> {
     }
   });
   console.log(result.success ? `\x1b[32m${result.message}\x1b[0m` : `\x1b[31m${result.message}\x1b[0m`);
+}
+
+// ─── Workspace CLI Commands Helper ─────────────────────────────────────────────
+
+async function handleWorkspaceCli(positionals: string[], values: any) {
+  const cmd = positionals[0];
+  const sub = positionals[1];
+
+  if (cmd === 'manifest') {
+    if (sub === 'init') {
+      try {
+        const manifest = await initWorkspaceManifest(process.cwd());
+        console.log(`\n\x1b[32m✓ Workspace successfully initialized!\x1b[0m`);
+        console.log(`  Fingerprint:  \x1b[1;37m${manifest.fingerprint}\x1b[0m`);
+        console.log(`  Platform:     \x1b[1;37m${manifest.platform}\x1b[0m`);
+        console.log(`  Arch:         \x1b[1;37m${manifest.arch}\x1b[0m`);
+        console.log(`  Tracked:      \x1b[1;37m${Object.keys(manifest.trackedPaths).length} files\x1b[0m\n`);
+        process.exit(0);
+      } catch (err: any) {
+        console.error(`\x1b[31mError: ${err.message}\x1b[0m`);
+        process.exit(1);
+      }
+    } else {
+      console.error(`\x1b[31mError: Unknown manifest subcommand "${sub}". Mapped: init\x1b[0m`);
+      process.exit(1);
+    }
+  }
+
+  if (cmd === 'status') {
+    const isRemote = positionals.includes('--remote') || process.argv.includes('--remote');
+    try {
+      const drift = await detectWorkspaceDrift(process.cwd());
+      console.log(`\n\x1b[1;36m  Workspace Offline Drift Status:\x1b[0m`);
+      console.log(`  Active Workspace Root: \x1b[1;37m${process.cwd()}\x1b[0m\n`);
+      
+      if (drift.files.length === 0) {
+        console.log(`  \x1b[33mNo candidate config files detected. Run "getit manifest init" to initialize.\x1b[0m\n`);
+      } else {
+        console.log(`  \x1b[1;37mStatus     Path\x1b[0m`);
+        console.log(`  ────────── ───────────────────────────────────────────────────`);
+        for (const file of drift.files) {
+          let statusColor = '\x1b[37m';
+          if (file.status === 'modified') statusColor = '\x1b[1;31m';
+          else if (file.status === 'missing') statusColor = '\x1b[31m';
+          else if (file.status === 'untracked') statusColor = '\x1b[1;33m';
+          else if (file.status === 'unmodified') statusColor = '\x1b[32m';
+
+          console.log(`  ${statusColor}${file.status.padEnd(10)}\x1b[0m ${file.path}`);
+        }
+        console.log('');
+      }
+
+      if (isRemote) {
+        console.log(`\x1b[1;36m  Evaluating Secure Remote Sync Status...\x1b[0m`);
+        const remote = checkRemoteStatus();
+        if (!remote.hasRemote) {
+          console.log(`  Remote:    \x1b[33mNot Configured\x1b[0m\n`);
+        } else {
+          console.log(`  Remote:    \x1b[1;37m${remote.remoteUrl}\x1b[0m`);
+          if (remote.error) {
+            console.log(`  Status:    \x1b[31m${remote.error}\x1b[0m\n`);
+          } else {
+            console.log(`  Synced:    \x1b[1;37m${remote.isSynced ? 'Yes ✓' : 'No ✗'}\x1b[0m`);
+            if (!remote.isSynced) {
+              console.log(`  Drift:     \x1b[33m${remote.ahead || 0} ahead, ${remote.behind || 0} behind\x1b[0m`);
+            }
+            console.log('');
+          }
+        }
+      }
+
+      process.exit(0);
+    } catch (err: any) {
+      console.error(`\x1b[31mError: ${err.message}\x1b[0m`);
+      process.exit(1);
+    }
+  }
+
+  if (cmd === 'inspect') {
+    const file = positionals[1];
+    if (!file) {
+      console.error(`\x1b[31mError: Missing file argument. Usage: getit inspect <file_path>\x1b[0m`);
+      process.exit(1);
+    }
+    try {
+      const content = await inspectTrackedFile(process.cwd(), file);
+      console.log(`\n\x1b[1;36m--- Inspecting Scrubbed Tracking Mirror: ${file} ---\x1b[0m\n`);
+      console.log(content);
+      console.log(`\n\x1b[1;36m---------------------------------------------------\x1b[0m\n`);
+      process.exit(0);
+    } catch (err: any) {
+      console.error(`\x1b[31mError: ${err.message}\x1b[0m`);
+      process.exit(1);
+    }
+  }
 }
 
 // Start the bootstrap routine

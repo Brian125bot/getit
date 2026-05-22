@@ -8,6 +8,7 @@ import { interceptToolCall } from '../mitl/interceptor.js';
 import { assertPathAllowed, resolveRealPath } from '../security/path-policy.js';
 import { executeCommandAsync } from '../execution/async-process.js';
 import { recordCommand } from '../backup/shadow-store.js';
+import { attemptDependencyHealing } from '../workspace/healer.js';
 
 // Stateful working directory tracking across asynchronous turns
 let activeCwd = process.cwd();
@@ -140,6 +141,54 @@ export async function executeBash(command: string, workingDirectory?: string): P
       exitCode: 0,
       haltTurn: false
     };
+  }
+
+  // Intercept failure for dependency healing
+  const healing = attemptDependencyHealing(result.stderr || result.error || '');
+  if (healing.matched && healing.command) {
+    console.log(`\n\x1b[35m❯ Dependency/Execution Failure Mapped: ${healing.description}\x1b[0m`);
+    console.log(`\x1b[35m❯ Mapped Remediation: ${healing.command}\x1b[0m`);
+    const healMitl = await interceptToolCall('BASH', healing.command, [`Deterministic dependency healing: ${healing.description}`]);
+    if (healMitl.approved) {
+      console.log(`\x1b[32m❯ Applying remediation command...\x1b[0m`);
+      const healResult = await executeCommandAsync(healMitl.payload, {
+        cwd: currentDir,
+        env: safeEnv,
+        timeoutMs: defaultTimeout
+      });
+      recordCommand(healMitl.payload, currentDir, healResult.exitCode);
+      if (healResult.exitCode === 0) {
+        console.log(`\x1b[32m❯ Remediation successful! Re-running original command: ${approvedCommand}\x1b[0m`);
+        const retryResult = await executeCommandAsync(approvedCommand, {
+          cwd: currentDir,
+          env: safeEnv,
+          timeoutMs: defaultTimeout
+        });
+        recordCommand(approvedCommand, currentDir, retryResult.exitCode);
+        if (retryResult.exitCode === 0) {
+          return {
+            stdout: retryResult.stdout,
+            stderr: retryResult.stderr,
+            contextStdout: retryResult.contextStdout,
+            contextStderr: retryResult.contextStderr,
+            exitCode: 0,
+            haltTurn: false
+          };
+        } else {
+          return {
+            stdout: retryResult.stdout,
+            stderr: retryResult.stderr,
+            contextStdout: retryResult.contextStdout,
+            contextStderr: retryResult.contextStderr,
+            exitCode: retryResult.exitCode,
+            haltTurn: true,
+            error: `Retry failed. Stderr: ${retryResult.contextStderr || retryResult.stderr}`
+          };
+        }
+      } else {
+        console.log(`\x1b[31m❯ Remediation failed with exit code ${healResult.exitCode}.\x1b[0m`);
+      }
+    }
   }
 
   const errMsg = result.error || `Command exited with code ${result.exitCode}.`;
