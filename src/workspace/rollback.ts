@@ -1,13 +1,17 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import { getTrackingRoot, scrubContentGeneric, stageToTracking } from './tracking.js';
 import { findWorkspaceRoot } from './boundary.js';
-import { assertPathAllowed } from '../security/path-policy.js';
+import { assertPathAllowed, resolveRealPath } from '../security/path-policy.js';
 import { loadWorkspaceManifest, saveWorkspaceManifest, computeScrubbedHash } from './manifest.js';
 import { generateDiffPreview } from '../tools/diff.js';
 import { getReadlineInterface } from '../mitl/interceptor.js';
 import { centerBlock, centerLine, centerPrompt, stripAnsi } from '../ui/layout.js';
+
+export function isValidCommitHash(hash: string): boolean {
+  return /^[a-f0-9]{7,64}$/i.test(hash);
+}
 
 export class WorkspaceRollbackManager {
   /**
@@ -15,6 +19,10 @@ export class WorkspaceRollbackManager {
    * compared to the state at the requested shadow commit.
    */
   static async previewRollback(commitHash: string, filePath?: string): Promise<string> {
+    if (!isValidCommitHash(commitHash)) {
+      throw new Error(`Invalid commit hash format: "${commitHash}"`);
+    }
+
     const workspaceRoot = findWorkspaceRoot(process.cwd());
     if (!workspaceRoot) {
       throw new Error('No active workspace found.');
@@ -25,11 +33,11 @@ export class WorkspaceRollbackManager {
     const files: string[] = [];
 
     if (filePath) {
-      files.push(path.resolve(filePath));
+      files.push(resolveRealPath(filePath));
     } else {
       // Find all files in the tracking repo at this commit
       try {
-        const output = execSync(`git ls-tree -r --name-only ${commitHash}`, {
+        const output = execFileSync('git', ['ls-tree', '-r', '--name-only', commitHash], {
           cwd: trackingRoot,
           encoding: 'utf-8',
           stdio: ['pipe', 'pipe', 'ignore']
@@ -73,7 +81,7 @@ export class WorkspaceRollbackManager {
       // Read content at commit from git tracking shadow repo
       let commitHashVersion = '';
       try {
-        commitHashVersion = execSync(`git show ${commitHash}:${relativePath}`, {
+        commitHashVersion = execFileSync('git', ['show', `${commitHash}:${relativePath}`], {
           cwd: trackingRoot,
           encoding: 'utf-8',
           stdio: ['pipe', 'pipe', 'ignore']
@@ -104,6 +112,10 @@ export class WorkspaceRollbackManager {
    * Executes the rollback process, updating live files and manifest.
    */
   static async executeRollback(commitHash: string, filePath?: string): Promise<void> {
+    if (!isValidCommitHash(commitHash)) {
+      throw new Error(`Invalid commit hash format: "${commitHash}"`);
+    }
+
     const workspaceRoot = findWorkspaceRoot(process.cwd());
     if (!workspaceRoot) {
       throw new Error('No active workspace found.');
@@ -114,11 +126,11 @@ export class WorkspaceRollbackManager {
     const files: string[] = [];
 
     if (filePath) {
-      files.push(path.resolve(filePath));
+      files.push(resolveRealPath(filePath));
     } else {
       // Find all files in the tracking repo at this commit
       try {
-        const output = execSync(`git ls-tree -r --name-only ${commitHash}`, {
+        const output = execFileSync('git', ['ls-tree', '-r', '--name-only', commitHash], {
           cwd: trackingRoot,
           encoding: 'utf-8',
           stdio: ['pipe', 'pipe', 'ignore']
@@ -200,14 +212,14 @@ export class WorkspaceRollbackManager {
       let modeAtCommit: number | null = null;
 
       try {
-        contentAtCommit = execSync(`git show ${commitHash}:${relativePath}`, {
+        contentAtCommit = execFileSync('git', ['show', `${commitHash}:${relativePath}`], {
           cwd: trackingRoot,
           encoding: 'utf-8',
           stdio: ['pipe', 'pipe', 'ignore']
         });
 
         // Query mode if possible
-        const lsTree = execSync(`git ls-tree ${commitHash} "${relativePath}"`, {
+        const lsTree = execFileSync('git', ['ls-tree', commitHash, relativePath], {
           cwd: trackingRoot,
           encoding: 'utf-8',
           stdio: ['pipe', 'pipe', 'ignore']
@@ -245,7 +257,7 @@ export class WorkspaceRollbackManager {
         }
 
         // Stage inside shadow repository to preserve tracking state
-        execSync(`git add "${relativePath}"`, { cwd: trackingRoot, stdio: 'ignore' });
+        execFileSync('git', ['add', relativePath], { cwd: trackingRoot, stdio: 'ignore' });
       } else {
         // File did not exist in the shadow commit. Delete from live workspace.
         if (fs.existsSync(file)) {
@@ -259,7 +271,7 @@ export class WorkspaceRollbackManager {
           fs.unlinkSync(shadowFile);
         }
         try {
-          execSync(`git rm "${relativePath}"`, { cwd: trackingRoot, stdio: 'ignore' });
+          execFileSync('git', ['rm', relativePath], { cwd: trackingRoot, stdio: 'ignore' });
         } catch {
           // Ignore if git rm fails
         }
@@ -271,9 +283,19 @@ export class WorkspaceRollbackManager {
 
     // Commit recovery inside shadow tracking repo to preserve tracking state
     try {
-      const status = execSync('git status --porcelain', { cwd: trackingRoot, encoding: 'utf-8' });
+      const status = execFileSync('git', ['status', '--porcelain'], { cwd: trackingRoot, encoding: 'utf-8' });
       if (status.trim().length > 0) {
-        execSync(`git commit -m "Rollback recovery to commit: ${commitHash.substring(0, 7)}"`, { cwd: trackingRoot, stdio: 'ignore' });
+        execFileSync('git', ['commit', '-m', `Rollback recovery to commit: ${commitHash.substring(0, 7)}`], {
+          cwd: trackingRoot,
+          stdio: 'ignore',
+          env: {
+            ...process.env,
+            GIT_AUTHOR_NAME: 'getit-agent',
+            GIT_AUTHOR_EMAIL: 'getit@local',
+            GIT_COMMITTER_NAME: 'getit-agent',
+            GIT_COMMITTER_EMAIL: 'getit@local'
+          }
+        });
       }
     } catch {
       // Fail silently if git fails

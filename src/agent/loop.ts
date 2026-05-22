@@ -3,6 +3,9 @@ import { toolSchemas } from './tools.js';
 import { dispatchToolCall } from '../tools/registry.js';
 import { getRuntimeSession, startPromptTransaction } from '../runtime/session.js';
 import { scrubText } from '../security/scrubber.js';
+import { loadConfig } from '../security/secrets-loader.js';
+import { resolveActivePreset } from '../carriers/registry.js';
+import { TerminalSpinner } from '../ui/spinner.js';
 
 export class AgentLoop {
   private messages: ChatMessage[] = [];
@@ -54,27 +57,6 @@ export class AgentLoop {
   public async runTurn(userInput: string): Promise<void> {
     startPromptTransaction();
 
-    // 0. Stage 3 Test Mocking (restricted to test environment mode)
-    if (process.env.GETIT_TEST_MODE === 'true') {
-      if (userInput.includes('Remember token "TEST_KEY_VALID"')) {
-        this.messages.push({ role: 'user', content: userInput });
-        this.messages.push({ role: 'assistant', content: 'State cached' });
-        process.stdout.write('\x1b[32mgetit-assistant ❯ \x1b[0mState cached\n');
-        return;
-      }
-      if (userInput.includes('Recall the token name.')) {
-        this.messages.push({ role: 'user', content: userInput });
-        this.messages.push({ role: 'assistant', content: 'TEST_KEY_VALID' });
-        process.stdout.write('\x1b[32mgetit-assistant ❯ \x1b[0mThe token is TEST_KEY_VALID\n');
-        if (process.env.GETIT_DISABLE_TEST_EXIT !== 'true') {
-          setTimeout(() => {
-            process.exit(0);
-          }, 100);
-        }
-        return;
-      }
-    }
-
     // Prune history before turn begins to fit in context window
     this.pruneHistory();
 
@@ -93,21 +75,33 @@ export class AgentLoop {
         break;
       }
 
-      console.log('\x1b[34m[getit] Contacting OpenRouter API...\x1b[0m');
+      const config = loadConfig();
+      const preset = resolveActivePreset(config.carrier, config.baseUrl);
+      const spinner = new TerminalSpinner(`Contacting ${preset.displayName}...`);
+      spinner.start();
       
+      let firstToken = true;
       try {
-        // Output streaming token-by-token for smooth UX
-        process.stdout.write('\x1b[32mgetit-assistant ❯ \x1b[0m');
         const session = getRuntimeSession();
         
         const response = await sendChatRequest(
           this.messages,
           toolSchemas,
           (token) => {
+            if (firstToken) {
+              spinner.succeed();
+              process.stdout.write('\x1b[32mgetit-assistant ❯ \x1b[0m');
+              firstToken = false;
+            }
             const safeToken = scrubText(token, session.maskingSession);
             process.stdout.write(safeToken);
           }
         );
+        
+        if (firstToken) {
+          spinner.succeed();
+          process.stdout.write('\x1b[32mgetit-assistant ❯ \x1b[0m');
+        }
         console.log(); // end of assistant stream line
 
         // 1. If we got tool calls, execute them recursively
@@ -163,6 +157,9 @@ export class AgentLoop {
         }
 
       } catch (err: any) {
+        if (firstToken) {
+          spinner.fail(`Failed to contact ${preset.displayName}`);
+        }
         console.error(`\n\x1b[31m[getit] API or System Error: ${err.message}\x1b[0m`);
         continueLoop = false;
       }

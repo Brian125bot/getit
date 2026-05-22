@@ -78,3 +78,8 @@ export class TerminalSpinner {
     process.stdout.write(centerLine(line, this.text.length + 2));
   }
 }
+
+// Always restore terminal cursor on process exit to avoid leaving terminal in a bad state
+process.on('exit', () => {
+  process.stdout.write('\x1B[?25h');
+});

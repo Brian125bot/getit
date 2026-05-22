@@ -1,5 +1,5 @@
 import { parseArgs } from 'node:util';
-import { readFileSync, existsSync, statSync, unlinkSync } from 'node:fs';
+import { readFileSync, existsSync, statSync, unlinkSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { getReadlineInterface, closeReadlineInterface, interceptToolCall } from './mitl/interceptor.js';
@@ -192,9 +192,19 @@ export async function runWorkspaceResolve(workspaceRoot: string): Promise<void> 
             unlinkSync(targetFile);
           }
           try {
-            const { execSync } = await import('node:child_process');
-            execSync(`git rm "${file.path}"`, { cwd: trackingRoot, stdio: 'ignore' });
-            execSync(`git commit -m "Tracked configuration removal: ${file.path}"`, { cwd: trackingRoot, stdio: 'ignore' });
+            const { execFileSync } = await import('node:child_process');
+            execFileSync('git', ['rm', file.path], { cwd: trackingRoot, stdio: 'ignore' });
+            execFileSync('git', ['commit', '-m', `Tracked configuration removal: ${file.path}`], {
+              cwd: trackingRoot,
+              stdio: 'ignore',
+              env: {
+                ...process.env,
+                GIT_AUTHOR_NAME: 'getit-agent',
+                GIT_AUTHOR_EMAIL: 'getit@local',
+                GIT_COMMITTER_NAME: 'getit-agent',
+                GIT_COMMITTER_EMAIL: 'getit@local'
+              }
+            });
           } catch {}
           console.log(centerLine(`\x1b[32m  ✓ Stopped tracking and deleted mirror for ${file.path}\x1b[0m`, file.path.length + 47));
         } else {
@@ -300,6 +310,13 @@ async function bootstrap() {
   if (positionals[0] === 'models') {
     await runModelsCli();
     process.exit(0);
+  }
+
+  const VALID_COMMANDS = ['undo', 'config', 'doctor', 'models', 'manifest', 'status', 'inspect', 'export', 'resolve', 'stage', 'history', 'log', 'rollback'];
+  if (positionals.length > 0 && !VALID_COMMANDS.includes(positionals[0])) {
+    console.error(`\x1b[31mError: Unknown command "${positionals[0]}".\x1b[0m`);
+    console.error(`Run "getit --help" for available commands.`);
+    process.exit(1);
   }
 
   if (['manifest', 'status', 'inspect', 'export', 'resolve', 'stage', 'history', 'log', 'rollback'].includes(positionals[0])) {
@@ -1044,8 +1061,21 @@ async function handleWorkspaceCli(positionals: string[], values: any) {
   }
 }
 
-// Start the bootstrap routine
-bootstrap().catch((err) => {
-  console.error('Fatal initialization error:', err);
-  process.exit(1);
-});
+// Start the bootstrap routine if run directly
+const isMain = () => {
+  if (!process.argv[1]) return false;
+  try {
+    const mainPath = realpathSync(process.argv[1]);
+    const modulePath = realpathSync(fileURLToPath(import.meta.url));
+    return mainPath === modulePath;
+  } catch {
+    return false;
+  }
+};
+
+if (isMain()) {
+  bootstrap().catch((err) => {
+    console.error('Fatal initialization error:', err);
+    process.exit(1);
+  });
+}

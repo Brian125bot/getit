@@ -8,7 +8,7 @@ process.env.GETIT_TEST_MODE = 'true';
 
 import { discoverEnvironment } from '../src/discovery/environment.js';
 import { buildSystemPrompt } from '../src/agent/prompt.js';
-import { loadApiKey } from '../src/security/secrets-loader.js';
+import { loadApiKey, getLoadedApiKey, resetLoadedApiKey } from '../src/security/secrets-loader.js';
 import { generateDiffPreview } from '../src/tools/diff.js';
 import { getActiveCwd, setActiveCwd } from '../src/tools/execute-bash.js';
 import { manageFile } from '../src/tools/manage-file.js';
@@ -58,10 +58,12 @@ test('Functionality Test Suite: Secrets Loader fallback and parser', async (t) =
       fs.writeFileSync(path.join(tempDir, '.env'), 'OPENROUTER_API_KEY=test_file_loaded_key\nOTHER_KEY=value', 'utf-8');
       const loaded = loadApiKey();
       assert.strictEqual(loaded, 'test_file_loaded_key');
-      assert.strictEqual(process.env.GETIT_API_KEY, 'test_file_loaded_key');
+      assert.strictEqual(process.env.GETIT_API_KEY, undefined);
+      assert.strictEqual(getLoadedApiKey(), 'test_file_loaded_key');
     } finally {
       process.chdir(originalCwd);
       fs.rmSync(tempDir, { recursive: true, force: true });
+      resetLoadedApiKey();
       if (backupEnv) process.env.OPENROUTER_API_KEY = backupEnv;
       else delete process.env.OPENROUTER_API_KEY;
       if (backupGetit) process.env.GETIT_API_KEY = backupGetit;
@@ -70,6 +72,7 @@ test('Functionality Test Suite: Secrets Loader fallback and parser', async (t) =
   });
 
   await t.test('should return undefined if no environment/file is set', () => {
+    resetLoadedApiKey();
     delete process.env.OPENROUTER_API_KEY;
     delete process.env.GETIT_API_KEY;
     const loaded = loadApiKey();

@@ -13,7 +13,7 @@ test('Phase 3 Resolve: Interactively resolve drift by mocking readline and chat'
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'getit-resolve-'));
   try {
     // 1. Setup workspace
-    const filePath = path.join(tempDir, 'config.json');
+    const filePath = path.join(tempDir, 'package.json');
     fs.writeFileSync(filePath, '{"v":1}', 'utf-8');
     await initWorkspaceManifest(tempDir);
 

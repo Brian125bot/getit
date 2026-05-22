@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import { scrubText, MaskingSession } from '../security/scrubber.js';
 import { resolveLiveFilePath } from './profiles.js';
 
@@ -20,10 +20,10 @@ export function getTrackingRoot(): string {
   const gitDir = path.join(trackingDir, '.git');
   if (!fs.existsSync(gitDir)) {
     try {
-      execSync('git init', { cwd: trackingDir, stdio: 'ignore' });
+      execFileSync('git', ['init'], { cwd: trackingDir, stdio: 'ignore' });
       // Configure simple git details to prevent errors on commit
-      execSync('git config user.name "getit"', { cwd: trackingDir, stdio: 'ignore' });
-      execSync('git config user.email "agent@getit.local"', { cwd: trackingDir, stdio: 'ignore' });
+      execFileSync('git', ['config', 'user.name', 'getit'], { cwd: trackingDir, stdio: 'ignore' });
+      execFileSync('git', ['config', 'user.email', 'agent@getit.local'], { cwd: trackingDir, stdio: 'ignore' });
     } catch {
       // If git init fails (e.g. git is not installed), fail gracefully or skip git tracking features
     }
@@ -66,11 +66,21 @@ export async function stageToTracking(workspaceRoot: string, relativePath: strin
 
   // Commit changes to tracking git if available
   try {
-    execSync(`git add "${relativePath}"`, { cwd: trackingRoot, stdio: 'ignore' });
+    execFileSync('git', ['add', relativePath], { cwd: trackingRoot, stdio: 'ignore' });
     // Check if there are changes before committing to avoid zero-exit status failures or warnings
-    const status = execSync(`git status --porcelain "${relativePath}"`, { cwd: trackingRoot, encoding: 'utf-8' });
+    const status = execFileSync('git', ['status', '--porcelain', relativePath], { cwd: trackingRoot, encoding: 'utf-8' });
     if (status.trim().length > 0) {
-      execSync(`git commit -m "Tracked configuration update: ${relativePath}"`, { cwd: trackingRoot, stdio: 'ignore' });
+      execFileSync('git', ['commit', '-m', `Tracked configuration update: ${relativePath}`], {
+        cwd: trackingRoot,
+        stdio: 'ignore',
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: 'getit-agent',
+          GIT_AUTHOR_EMAIL: 'getit@local',
+          GIT_COMMITTER_NAME: 'getit-agent',
+          GIT_COMMITTER_EMAIL: 'getit@local'
+        }
+      });
     }
   } catch (err) {
     // Fail silently if git fails

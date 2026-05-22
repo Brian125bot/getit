@@ -11,6 +11,17 @@ import {
   requiresApiKey,
 } from '../carriers/registry.js';
 
+// Module-level closure — never written to process.env to prevent child process leakage
+let _loadedApiKey: string | undefined;
+
+export function getLoadedApiKey(): string | undefined {
+  return _loadedApiKey;
+}
+
+export function resetLoadedApiKey(): void {
+  _loadedApiKey = undefined;
+}
+
 export type { CarrierId };
 
 export interface CarrierConfig {
@@ -96,7 +107,9 @@ export function loadConfig(): CarrierConfig {
 
   const apiKey = resolveApiKey(preset, configMap);
   if (apiKey) {
-    process.env.GETIT_API_KEY = apiKey;
+    // Store in module-level closure only — do NOT write to process.env to prevent
+    // the key from leaking into child processes via env inheritance.
+    _loadedApiKey = apiKey;
     registerKnownSecret(apiKey);
   }
 
@@ -151,7 +164,8 @@ export function loadConfig(): CarrierConfig {
 }
 
 export function loadApiKey(): string | undefined {
-  return loadConfig().apiKey;
+  // Return from closure first (already loaded), fall back to fresh load
+  return _loadedApiKey ?? loadConfig().apiKey;
 }
 
 export function getActivePreset(): CarrierPreset {
