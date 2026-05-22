@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { parseArgs } from 'node:util';
 import { readFileSync, existsSync, statSync, unlinkSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
