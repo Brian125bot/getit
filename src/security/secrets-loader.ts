@@ -2,21 +2,31 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { registerKnownSecret } from './scrubber.js';
+import {
+  CarrierId,
+  CarrierPreset,
+  normalizeCarrierId,
+  inferCarrierId,
+  resolveActivePreset,
+  requiresApiKey,
+} from '../carriers/registry.js';
+
+export type { CarrierId };
 
 export interface CarrierConfig {
-  carrier: 'openrouter' | 'openai' | 'custom';
+  carrier: CarrierId;
   apiKey?: string;
   baseUrl: string;
   model: string;
   timeout: number;
   profile: 'strict' | 'normal' | 'override';
   dryRun: boolean;
+  azureResource?: string;
+  azureDeployment?: string;
 }
 
-export function loadConfig(): CarrierConfig {
+function buildConfigMap(): Map<string, string> {
   const configMap = new Map<string, string>();
-
-  // 1. Gather search file paths from lowest to highest priority
   const cwd = process.cwd();
   const homeDir = os.homedir();
   const filePaths = [
@@ -25,95 +35,77 @@ export function loadConfig(): CarrierConfig {
     path.join(cwd, '.env'),
   ];
 
-  // Load and parse properties from files
   for (const filePath of filePaths) {
     if (fs.existsSync(filePath)) {
       try {
         const content = fs.readFileSync(filePath, 'utf-8');
-        const lines = content.split('\n');
-        for (const line of lines) {
+        for (const line of content.split('\n')) {
           const trimmed = line.trim();
           if (trimmed.startsWith('#') || !trimmed.includes('=')) continue;
           const [key, ...valueParts] = trimmed.split('=');
-          const value = valueParts.join('=').trim().replace(/^['"]|['\"]$/g, '');
+          const value = valueParts.join('=').trim().replace(/^['"]|['"]$/g, '');
           if (key && value) {
             configMap.set(key.trim().toUpperCase(), value);
           }
         }
       } catch {
-        // Ignore files we can't read
+        // Ignore unreadable files
       }
     }
   }
+  return configMap;
+}
 
-  // Priority search parameter helper
-  const getParam = (keys: string[]): string | undefined => {
-    // A. Highest priority: Process environment variables
-    for (const key of keys) {
-      if (process.env[key.toUpperCase()]) {
-        return process.env[key.toUpperCase()];
-      }
-    }
-    // B. Fallback priority: Persistence files
-    for (const key of keys) {
-      if (configMap.has(key.toUpperCase())) {
-        return configMap.get(key.toUpperCase());
-      }
-    }
-    return undefined;
-  };
-
-  // 1. Resolve Carrier
-  const rawCarrier = getParam(['GETIT_CARRIER', 'CARRIER']);
-  let carrier: 'openrouter' | 'openai' | 'custom' = 'openrouter';
-  if (rawCarrier) {
-    const norm = rawCarrier.trim().toLowerCase();
-    if (norm === 'openai') {
-      carrier = 'openai';
-    } else if (norm === 'custom' || norm === 'local') {
-      carrier = 'custom';
+function getParam(configMap: Map<string, string>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    if (process.env[key.toUpperCase()]) {
+      return process.env[key.toUpperCase()];
     }
   }
+  for (const key of keys) {
+    if (configMap.has(key.toUpperCase())) {
+      return configMap.get(key.toUpperCase());
+    }
+  }
+  return undefined;
+}
 
-  // 2. Resolve API Key
-  const apiKey = getParam(['GETIT_API_KEY', 'API_KEY', 'OPENROUTER_API_KEY']);
+function resolveApiKey(preset: CarrierPreset, configMap: Map<string, string>): string | undefined {
+  for (const envKey of preset.keyEnvVars) {
+    const fromEnv = process.env[envKey.toUpperCase()];
+    if (fromEnv) return fromEnv;
+  }
+  for (const envKey of preset.keyEnvVars) {
+    const fromFile = configMap.get(envKey.toUpperCase());
+    if (fromFile) return fromFile;
+  }
+  return undefined;
+}
+
+export function loadConfig(): CarrierConfig {
+  const configMap = buildConfigMap();
+
+  const rawCarrier = getParam(configMap, ['GETIT_CARRIER', 'CARRIER']);
+  let carrier = normalizeCarrierId(rawCarrier);
+
+  let baseUrl = getParam(configMap, ['GETIT_BASE_URL', 'BASE_URL']);
+  carrier = inferCarrierId(carrier, baseUrl);
+
+  const preset = resolveActivePreset(carrier, baseUrl);
+  baseUrl = preset.baseUrl;
+
+  const apiKey = resolveApiKey(preset, configMap);
   if (apiKey) {
     process.env.GETIT_API_KEY = apiKey;
-    process.env.OPENROUTER_API_KEY = apiKey;
     registerKnownSecret(apiKey);
   }
 
-  // 3. Resolve Base URL
-  let baseUrl = getParam(['GETIT_BASE_URL', 'BASE_URL']);
-  if (!baseUrl) {
-    if (carrier === 'openrouter') {
-      baseUrl = 'https://openrouter.ai/api/v1';
-    } else if (carrier === 'openai') {
-      baseUrl = 'https://api.openai.com/v1';
-    } else {
-      baseUrl = 'http://localhost:11434/v1';
-    }
-  } else {
-    // Strip trailing slash if present
-    if (baseUrl.endsWith('/')) {
-      baseUrl = baseUrl.slice(0, -1);
-    }
-  }
-
-  // 4. Resolve Model
-  let model = getParam(['GETIT_MODEL', 'MODEL', 'OPENROUTER_MODEL']);
+  let model = getParam(configMap, ['GETIT_MODEL', 'MODEL', 'OPENROUTER_MODEL']);
   if (!model) {
-    if (carrier === 'openrouter') {
-      model = 'nvidia/nemotron-3-super-120b-a12b:free';
-    } else if (carrier === 'openai') {
-      model = 'gpt-4o';
-    } else {
-      model = 'llama3';
-    }
+    model = preset.defaultModel;
   }
 
-  // 5. Resolve Timeout
-  const rawTimeout = getParam(['GETIT_TIMEOUT', 'TIMEOUT']);
+  const rawTimeout = getParam(configMap, ['GETIT_TIMEOUT', 'TIMEOUT']);
   let timeout = 60000;
   if (rawTimeout) {
     const parsed = parseInt(rawTimeout, 10);
@@ -122,35 +114,57 @@ export function loadConfig(): CarrierConfig {
     }
   }
 
-  // 6. Resolve Security Profile
-  const rawProfile = getParam(['GETIT_PROFILE', 'PROFILE']);
+  const rawProfile = getParam(configMap, ['GETIT_PROFILE', 'PROFILE']);
   let profile: 'strict' | 'normal' | 'override' = 'normal';
   if (rawProfile) {
     const norm = rawProfile.trim().toLowerCase();
     if (['strict', 'normal', 'override'].includes(norm)) {
-      profile = norm as any;
+      profile = norm as 'strict' | 'normal' | 'override';
     }
   }
 
-  // 7. Resolve Dry Run
-  const rawDryRun = getParam(['GETIT_DRY_RUN', 'DRY_RUN']);
+  const rawDryRun = getParam(configMap, ['GETIT_DRY_RUN', 'DRY_RUN']);
   let dryRun = false;
   if (rawDryRun) {
     const norm = rawDryRun.trim().toLowerCase();
     dryRun = norm === 'true' || norm === '1' || norm === 'yes';
   }
 
+  const azureResource = getParam(configMap, ['GETIT_AZURE_RESOURCE', 'AZURE_OPENAI_RESOURCE']);
+  const azureDeployment = getParam(configMap, ['GETIT_AZURE_DEPLOYMENT', 'AZURE_OPENAI_DEPLOYMENT']);
+
+  if (carrier === 'azure' && azureResource && azureDeployment) {
+    baseUrl = `https://${azureResource}.openai.azure.com/openai/deployments/${azureDeployment}`;
+  }
+
   return {
-    carrier,
+    carrier: preset.id,
     apiKey,
     baseUrl,
     model,
     timeout,
     profile,
     dryRun,
+    azureResource,
+    azureDeployment,
   };
 }
 
 export function loadApiKey(): string | undefined {
   return loadConfig().apiKey;
+}
+
+export function getActivePreset(): CarrierPreset {
+  const config = loadConfig();
+  return resolveActivePreset(config.carrier, config.baseUrl);
+}
+
+export function configRequiresApiKey(config: CarrierConfig = loadConfig()): boolean {
+  const preset = resolveActivePreset(config.carrier, config.baseUrl);
+  return requiresApiKey(preset);
+}
+
+export function getApiKeyEnvHints(carrierId: CarrierId = loadConfig().carrier): string {
+  const preset = resolveActivePreset(carrierId);
+  return preset.keyEnvVars.slice(0, 3).join(', ');
 }

@@ -44,27 +44,28 @@ test('Functionality Test Suite: System Prompt Builder', () => {
 });
 
 test('Functionality Test Suite: Secrets Loader fallback and parser', async (t) => {
-  const cwd = process.cwd();
-  const testEnvFile = path.join(cwd, '.env');
   const backupEnv = process.env.OPENROUTER_API_KEY;
+  const backupGetit = process.env.GETIT_API_KEY;
+  const originalCwd = process.cwd();
 
   await t.test('should read from .env if present in current directory', () => {
-    // Clean process.env to ensure we test file parsing
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'getit-loader-'));
+    process.chdir(tempDir);
     delete process.env.OPENROUTER_API_KEY;
     delete process.env.GETIT_API_KEY;
 
     try {
-      fs.writeFileSync(testEnvFile, 'OPENROUTER_API_KEY=test_file_loaded_key\nOTHER_KEY=value', 'utf-8');
+      fs.writeFileSync(path.join(tempDir, '.env'), 'OPENROUTER_API_KEY=test_file_loaded_key\nOTHER_KEY=value', 'utf-8');
       const loaded = loadApiKey();
       assert.strictEqual(loaded, 'test_file_loaded_key');
-      assert.strictEqual(process.env.OPENROUTER_API_KEY, 'test_file_loaded_key');
+      assert.strictEqual(process.env.GETIT_API_KEY, 'test_file_loaded_key');
     } finally {
-      if (fs.existsSync(testEnvFile)) {
-        fs.unlinkSync(testEnvFile);
-      }
-      if (backupEnv) {
-        process.env.OPENROUTER_API_KEY = backupEnv;
-      }
+      process.chdir(originalCwd);
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      if (backupEnv) process.env.OPENROUTER_API_KEY = backupEnv;
+      else delete process.env.OPENROUTER_API_KEY;
+      if (backupGetit) process.env.GETIT_API_KEY = backupGetit;
+      else delete process.env.GETIT_API_KEY;
     }
   });
 

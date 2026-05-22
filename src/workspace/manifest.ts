@@ -4,6 +4,7 @@ import * as crypto from 'node:crypto';
 import * as os from 'node:os';
 import { discoverEnvironment } from '../discovery/environment.js';
 import { scrubText, MaskingSession } from '../security/scrubber.js';
+import { ensureProfileLayout, collectProfileCandidatePaths } from './profiles.js';
 
 export interface TrackedPathMetadata {
   hash: string;
@@ -21,6 +22,19 @@ export interface WorkspaceManifest {
 }
 
 export const MANIFEST_FILENAME = '.getit-manifest.json';
+
+/** Root-level config files discovered at manifest init and during drift scans. */
+export const CONFIG_CANDIDATES = [
+  'package.json',
+  'Cargo.toml',
+  'pyproject.toml',
+  'go.mod',
+  '.nvmrc',
+  '.getitignore',
+  '.env',
+  '.gitignore',
+  'README.md'
+] as const;
 
 export function generateFingerprint(): string {
   const hash = crypto.createHash('sha256');
@@ -50,20 +64,13 @@ export async function initWorkspaceManifest(rootPath: string): Promise<Workspace
     trackedPaths: {}
   };
 
-  // Find common files to track in the workspace root
-  const candidates = [
-    'package.json',
-    'Cargo.toml',
-    'pyproject.toml',
-    'go.mod',
-    '.nvmrc',
-    '.getitignore',
-    '.env',
-    '.gitignore',
-    'README.md'
-  ];
+  ensureProfileLayout(rootPath, fingerprint);
 
-  for (const candidate of candidates) {
+  const trackCandidates = [...CONFIG_CANDIDATES, ...collectProfileCandidatePaths(rootPath, fingerprint)];
+
+  for (const candidate of trackCandidates) {
+    if (manifest.trackedPaths[candidate]) continue;
+
     const fullPath = path.join(rootPath, candidate);
     if (fs.existsSync(fullPath)) {
       const stat = fs.statSync(fullPath);

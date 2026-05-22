@@ -94,6 +94,26 @@ test('Universal Config Suite: Parser and Carrier Defaults', async (t) => {
     assert.strictEqual(config.carrier, 'openrouter');
   });
 
+  await t.test('should resolve groq carrier with correct defaults', () => {
+    cleanTempFiles();
+    fs.writeFileSync(testRcFile, 'GETIT_CARRIER=groq\nGETIT_API_KEY=gsk_testgroqkey123456789', 'utf-8');
+
+    const config = loadConfig();
+    assert.strictEqual(config.carrier, 'groq');
+    assert.strictEqual(config.baseUrl, 'https://api.groq.com/openai/v1');
+    assert.strictEqual(config.model, 'llama-3.3-70b-versatile');
+  });
+
+  await t.test('should allow ollama carrier without API key', () => {
+    cleanTempFiles();
+    fs.writeFileSync(testRcFile, 'GETIT_CARRIER=ollama\nGETIT_BASE_URL=http://localhost:11434/v1', 'utf-8');
+
+    const config = loadConfig();
+    assert.strictEqual(config.carrier, 'ollama');
+    assert.strictEqual(config.apiKey, undefined);
+    assert.strictEqual(config.baseUrl, 'http://localhost:11434/v1');
+  });
+
   await t.test('should strip optional single and double quotes from parsed values', () => {
     cleanTempFiles();
     fs.writeFileSync(testEnvFile, 'GETIT_CARRIER="openai"\nGETIT_API_KEY=\'sk-quotedkey\'\nGETIT_BASE_URL="http://test.url/"', 'utf-8');

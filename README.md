@@ -121,16 +121,32 @@ Enforces non-destructive configuration file patching:
      ```bash
      npm link
      ```
-5. Set your `OPENROUTER_API_KEY` using either environment variables or a local configuration file:
-   - **Option A: Environment Variable**
-     ```bash
-     export OPENROUTER_API_KEY="your-openrouter-key"
-     ```
-   - **Option B: Local Config File**
-     Create a `.env` or `.getitrc` file in the root of the project:
-     ```text
-     OPENROUTER_API_KEY=your-openrouter-key
-     ```
+5. Configure your LLM carrier (interactive wizard recommended):
+   ```bash
+   getit --setup
+   ```
+   Or set keys manually in `.env` / `.getitrc` / `~/.getitrc`:
+   ```text
+   GETIT_CARRIER=openrouter
+   GETIT_API_KEY=your-api-key
+   GETIT_MODEL=nvidia/nemotron-3-super-120b-a12b:free
+   ```
+
+### Supported LLM carriers
+
+| Carrier ID | Provider | Key env vars (first match wins) |
+|------------|----------|----------------------------------|
+| `openrouter` | OpenRouter | `OPENROUTER_API_KEY`, `GETIT_API_KEY` |
+| `openai` | OpenAI | `OPENAI_API_KEY`, `GETIT_API_KEY` |
+| `anthropic` | Anthropic | `ANTHROPIC_API_KEY`, `GETIT_API_KEY` |
+| `google` | Google Gemini | `GOOGLE_API_KEY`, `GEMINI_API_KEY` |
+| `groq` | Groq | `GROQ_API_KEY`, `GETIT_API_KEY` |
+| `deepseek` | DeepSeek | `DEEPSEEK_API_KEY`, `GETIT_API_KEY` |
+| `together` | Together AI | `TOGETHER_API_KEY`, `GETIT_API_KEY` |
+| `mistral` | Mistral | `MISTRAL_API_KEY`, `GETIT_API_KEY` |
+| `azure` | Azure OpenAI | `AZURE_OPENAI_API_KEY`, `GETIT_API_KEY` |
+| `ollama` | Ollama (local) | No key required |
+| `custom` | Any OpenAI-compatible URL | `GETIT_API_KEY` (optional) |
 
 ---
 
@@ -153,7 +169,30 @@ getit --profile strict
 getit undo
 ```
 
-Inside the REPL, `/undo`, `/dry-run on`, `/dry-run off`, and `/policy` are handled as local slash commands rather than being sent to the model.
+Carrier & model commands:
+```bash
+getit --setup                    # Interactive wizard (all carriers)
+getit config                     # Show active carrier, model, timeout
+getit doctor                     # Health check: API ping, git, gh
+getit models                     # List models for active carrier
+getit --model gpt-4o             # Override model for one session
+```
+
+Inside the REPL: `/carrier groq`, `/models`, `/model <id>`, `/config`, `/setup`.
+
+Phase 3 workspace commands:
+```bash
+getit manifest init              # Initialize workspace manifest + profile dirs
+getit status                     # Offline drift report
+getit status --remote            # Drift + GitHub sync status (via gh)
+getit inspect .env               # View scrubbed tracking mirror
+getit export [output-dir]        # Bulk export scrubbed tracked files
+getit resolve                    # Interactively resolve drift (with AI advisory)
+getit history                    # Shadow Git commit history
+getit rollback <hash> [file]     # Roll back live files to a shadow commit
+```
+
+Inside the REPL, carrier commands (`/carrier`, `/models`, `/model`, `/config`, `/setup`), workspace commands (`/status`, `/resolve`, `/sync`, `/export`, `/history`, `/rollback`), and safety commands (`/undo`, `/dry-run`, `/policy`) are handled locally rather than being sent to the model.
 
 Once loaded, you will see a system dashboard and a custom prompt:
 ```text
@@ -174,7 +213,7 @@ getit-agent ❯ Install ripgrep and update my local shell path
 
 ## 6. Test Suite
 
-`getit` features a professional and comprehensive double-suite test architecture (36 tests in total) executed using Node's native test runner:
+`getit` features a comprehensive test suite (112 tests) executed using Node's native test runner:
 
 ```bash
 npm test
@@ -197,3 +236,10 @@ npm test
 - Asserts environment variables and architectural injection in prompt context.
 - Tests REPL session persistence and turn loop control.
 - Tests colored patch diffs.
+
+### 4. Phase 2 & Phase 3 Suites (`tests/phase2-*.test.ts`, `tests/phase3-*.test.ts`)
+- Async execution, policy engine, scrubbing, dry-run, platform matrix.
+- Workspace manifest, drift, healer, remote sync, export, profiles, history/rollback.
+
+### 5. Multi-Carrier Suite (`tests/carriers-*.test.ts`)
+- Carrier registry presets, auth modes, transport headers, config loader per provider.

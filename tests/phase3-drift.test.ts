@@ -18,7 +18,8 @@ test('Phase 3 Drift: Detect unmodified, modified, missing, and untracked drift',
 
     // 2. Initialize the manifest
     const manifest = await initWorkspaceManifest(tempDir);
-    assert.strictEqual(Object.keys(manifest.trackedPaths).length, 2);
+    assert.ok(manifest.trackedPaths['package.json']);
+    assert.ok(manifest.trackedPaths['.env']);
 
     // Baseline: No drift should be detected immediately after init
     let drift = await detectWorkspaceDrift(tempDir);

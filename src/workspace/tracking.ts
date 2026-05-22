@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { execSync } from 'node:child_process';
 import { scrubText, MaskingSession } from '../security/scrubber.js';
+import { resolveLiveFilePath } from './profiles.js';
 
 /**
  * Resolves the tracking repository root directory and ensures it is initialized as a Git repository.
@@ -44,7 +45,7 @@ export function scrubContentGeneric(content: string): string {
  * Copies a file from the workspace, scrubs it of credentials, and stages/commits it in the tracking repository.
  */
 export async function stageToTracking(workspaceRoot: string, relativePath: string): Promise<void> {
-  const liveFile = path.join(workspaceRoot, relativePath);
+  const liveFile = resolveLiveFilePath(workspaceRoot, relativePath);
   if (!fs.existsSync(liveFile)) {
     throw new Error(`File does not exist: ${liveFile}`);
   }

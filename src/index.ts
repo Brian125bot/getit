@@ -6,9 +6,13 @@ import { getReadlineInterface, closeReadlineInterface, interceptToolCall } from 
 import { discoverEnvironment } from './discovery/environment.js';
 import { buildSystemPrompt } from './agent/prompt.js';
 import { AgentLoop } from './agent/loop.js';
-import { loadApiKey, loadConfig } from './security/secrets-loader.js';
+import { loadConfig, configRequiresApiKey, getApiKeyEnvHints } from './security/secrets-loader.js';
 import { runSetupWizard } from './setup/wizard.js';
-import { setActiveModel, getActiveModel } from './agent/client.js';
+import { setActiveModel, getActiveModel, initSessionModel } from './agent/client.js';
+import { normalizeCarrierId, resolveActivePreset } from './carriers/registry.js';
+import { listModels, formatModelList } from './carriers/models.js';
+import { runDoctorChecks } from './carriers/doctor.js';
+import { switchCarrier } from './carriers/session.js';
 import { setDefaultTimeout, getDefaultTimeout, getActiveCwd, setActiveCwd } from './tools/execute-bash.js';
 import { configureRuntimeSession, getRuntimeSession, PolicyProfile } from './runtime/session.js';
 import { renderRoadmap } from './planning/plan-queue.js';
@@ -19,8 +23,13 @@ import { detectWorkspaceDrift } from './workspace/drift.js';
 import { inspectTrackedFile, stageToTracking, getTrackingRoot, scrubContentGeneric } from './workspace/tracking.js';
 import { checkRemoteStatus, syncWithRemote } from './workspace/remote.js';
 import { findWorkspaceRoot } from './workspace/boundary.js';
+import { resolveLiveFilePath } from './workspace/profiles.js';
 import { generateDiffPreview } from './tools/diff.js';
 import { centerBlock, centerLine, centerPrompt, stripAnsi } from './ui/layout.js';
+import { getDriftAdvice } from './workspace/drift-advisor.js';
+import { WorkspaceHistoryManager } from './workspace/history.js';
+import { WorkspaceRollbackManager } from './workspace/rollback.js';
+import { exportScrubbedWorkspace } from './workspace/export.js';
 
 // Dynamic version loader resolving relative to both source and compiled dist paths
 function getVersion(): string {
@@ -47,6 +56,49 @@ function getVersion(): string {
   return '1.0.0';
 }
 
+async function renderAdvisorCard(filePath: string, scrubbedContent: string, diffText: string): Promise<void> {
+  const advice = await getDriftAdvice(filePath, scrubbedContent, diffText);
+  const width = 58;
+  const top = `\x1b[1;35m╔${'═'.repeat(width - 2)}╗\x1b[0m`;
+  const mid = `\x1b[1;35m╟${'─'.repeat(width - 2)}╢\x1b[0m`;
+  const bot = `\x1b[1;35m╚${'═'.repeat(width - 2)}╝\x1b[0m`;
+
+  const padCenter = (text: string, w: number): string => {
+    const visible = stripAnsi(text).length;
+    const padding = Math.floor((w - visible) / 2);
+    const left = ' '.repeat(Math.max(0, padding));
+    const right = ' '.repeat(Math.max(0, w - visible - padding));
+    return left + text + right;
+  };
+
+  const title = `\x1b[1;35m║\x1b[1;33m${padCenter('🤖 AI DRIFT ADVISORY', width - 2)}\x1b[1;35m║\x1b[0m`;
+  
+  const adviceLines = advice.split('\n').filter(Boolean);
+  const formattedLines: string[] = [];
+  const maxLen = width - 6;
+
+  for (const line of adviceLines) {
+    let remaining = line;
+    while (remaining.length > 0) {
+      let slice = remaining.substring(0, maxLen);
+      if (remaining.length > maxLen) {
+        const lastSpace = slice.lastIndexOf(' ');
+        if (lastSpace > 10) {
+          slice = slice.substring(0, lastSpace);
+        }
+      }
+      remaining = remaining.substring(slice.length).trim();
+      
+      const visibleLength = stripAnsi(slice).length;
+      const padRight = Math.max(0, maxLen - visibleLength);
+      formattedLines.push(`\x1b[1;35m║\x1b[0m  \x1b[35m${slice}\x1b[0m${' '.repeat(padRight)}  \x1b[1;35m║\x1b[0m`);
+    }
+  }
+
+  const card = [top, title, mid, ...formattedLines, bot].join('\n');
+  console.log('\n' + centerBlock(card) + '\n');
+}
+
 async function runWorkspaceResolve(workspaceRoot: string): Promise<void> {
   const drift = await detectWorkspaceDrift(workspaceRoot);
   const filesToResolve = drift.files.filter(f => f.status !== 'unmodified');
@@ -64,7 +116,7 @@ async function runWorkspaceResolve(workspaceRoot: string): Promise<void> {
 
     if (file.status === 'modified') {
       try {
-        const livePath = join(workspaceRoot, file.path);
+        const livePath = resolveLiveFilePath(workspaceRoot, file.path);
         const liveRaw = readFileSync(livePath, 'utf-8');
         const liveScrubbed = scrubContentGeneric(liveRaw);
         const trackedContent = await inspectTrackedFile(workspaceRoot, file.path);
@@ -72,6 +124,9 @@ async function runWorkspaceResolve(workspaceRoot: string): Promise<void> {
         const diff = generateDiffPreview(trackedContent, liveScrubbed);
         console.log(centerLine(`\x1b[1;33mUnified Diff Preview (Scrubbed):\x1b[0m`, 32));
         console.log(centerBlock(diff));
+        
+        // Dynamically integrate advisor card right above decision prompt
+        await renderAdvisorCard(file.path, liveScrubbed, diff);
         
         const prompt = centerPrompt(`\x1b[1;36mStage and track these changes for ${file.path}? [y/N] ❯ \x1b[0m`);
         const answer = await rl.question(prompt);
@@ -94,12 +149,15 @@ async function runWorkspaceResolve(workspaceRoot: string): Promise<void> {
       }
     } else if (file.status === 'untracked') {
       try {
-        const livePath = join(workspaceRoot, file.path);
+        const livePath = resolveLiveFilePath(workspaceRoot, file.path);
         const liveRaw = readFileSync(livePath, 'utf-8');
         const liveScrubbed = scrubContentGeneric(liveRaw);
         
         console.log(centerLine(`\x1b[1;33mScrubbed Content Preview:\x1b[0m`, 25));
         console.log(centerBlock(liveScrubbed));
+        
+        // Dynamically integrate advisor card right above decision prompt
+        await renderAdvisorCard(file.path, liveScrubbed, liveScrubbed);
         
         const prompt = centerPrompt(`\x1b[1;36mStart tracking untracked file ${file.path}? [y/N] ❯ \x1b[0m`);
         const answer = await rl.question(prompt);
@@ -229,14 +287,29 @@ async function bootstrap() {
     process.exit(0);
   }
 
-  if (['manifest', 'status', 'inspect', 'resolve', 'stage'].includes(positionals[0])) {
+  if (positionals[0] === 'config') {
+    printConfigCard();
+    process.exit(0);
+  }
+
+  if (positionals[0] === 'doctor') {
+    await runDoctorCli();
+    process.exit(0);
+  }
+
+  if (positionals[0] === 'models') {
+    await runModelsCli();
+    process.exit(0);
+  }
+
+  if (['manifest', 'status', 'inspect', 'export', 'resolve', 'stage', 'history', 'log', 'rollback'].includes(positionals[0])) {
     await handleWorkspaceCli(positionals, values);
   }
 
   if (values.model) {
-    setActiveModel(values.model);
+    initSessionModel(values.model);
   } else {
-    setActiveModel(config.model);
+    initSessionModel(config.model);
   }
 
   if (values.timeout) {
@@ -270,16 +343,15 @@ async function bootstrap() {
     }
   }
 
-  // 4. Load API Key — launch guided wizard if missing (skip for custom if keyless)
-  let apiKey = config.apiKey;
-  if (!apiKey && config.carrier !== 'custom') {
-    // If running in one-shot mode or non-interactive context, don't trigger the wizard
+  // 4. Load API Key — launch guided wizard if missing (keyless carriers skip)
+  if (!config.apiKey && configRequiresApiKey(config)) {
     if (positionals.length > 0 || !process.stdout.isTTY) {
       console.error('\x1b[1;31mError: API key is not set.\x1b[0m');
-      console.error('Please export GETIT_API_KEY="your-key-here" or save it inside a .env or .getitrc file.');
+      console.error(`Set one of: ${getApiKeyEnvHints(config.carrier)}`);
+      console.error('Or run: getit --setup');
       process.exit(1);
     }
-    apiKey = await runSetupWizard();
+    await runSetupWizard();
   }
 
   // 5. Perform environmental discovery
@@ -311,6 +383,18 @@ async function bootstrap() {
   // 9. Interactive REPL Loop
   // Draw Dashboard welcome banner
   const root = findWorkspaceRoot(process.cwd());
+  let workspaceBanner = '';
+  if (root) {
+    try {
+      const manifest = loadWorkspaceManifest(root);
+      const count = Object.keys(manifest.trackedPaths).length;
+      workspaceBanner = `│ \x1b[1;32mWorkspace:\x1b[0m TRACKED (\x1b[1;37m${count}\x1b[0m files) \x1b[1;36m                              │\n` +
+                        `├────────────────────────────────────────────────────────┤\n`;
+    } catch {
+      workspaceBanner = '';
+    }
+  }
+
   let workspaceWarning = '';
   if (!root) {
     const anchors = ['package.json', 'Cargo.toml', 'pyproject.toml', 'go.mod', '.git'];
@@ -336,7 +420,9 @@ async function bootstrap() {
   welcomeLines.push(`┌────────────────────────────────────────────────────────┐`);
   welcomeLines.push(`│ \x1b[1;32mGETIT WORKSPACE AGENT v${getVersion().padEnd(10)}\x1b[1;36m                         │`);
   welcomeLines.push(`├────────────────────────────────────────────────────────┤`);
-  if (workspaceWarning) {
+  if (workspaceBanner) {
+    welcomeLines.push(...workspaceBanner.trim().split('\n'));
+  } else if (workspaceWarning) {
     welcomeLines.push(...workspaceWarning.trim().split('\n'));
   }
   welcomeLines.push(`│ \x1b[1;37mArchitecture:\x1b[0m  ${env.arch.padEnd(40)} \x1b[1;36m│`);
@@ -437,47 +523,45 @@ async function handleSlashCommand(input: string, agent: AgentLoop, systemPrompt:
     case '/policy':
       console.log(`\n  Policy Profile: \x1b[1;37m${getRuntimeSession().policyProfile}\x1b[0m\n`);
       return;
-    case '/config': {
-      const currentConfig = loadConfig();
-      const configCardLines = [
-        `Active Carrier:  \x1b[1;37m${currentConfig.carrier}\x1b[0m`,
-        `Base API URL:    \x1b[1;37m${currentConfig.baseUrl}\x1b[0m`,
-        `Active LLM Model:\x1b[1;37m${getActiveModel()}\x1b[0m`,
-        `Exec Timeout:    \x1b[1;37m${getDefaultTimeout()}ms\x1b[0m`,
-        `Safety Profile:  \x1b[1;37m${getRuntimeSession().policyProfile}\x1b[0m`,
-        `Dry-Run Mode:    \x1b[1;37m${getRuntimeSession().dryRun ? 'enabled' : 'disabled'}\x1b[0m`,
-        `API Key:         \x1b[1;37m${currentConfig.apiKey ? '[CONFIGURED] (redacted)' : '[NOT CONFIGURED]'}\x1b[0m`,
-      ];
-      
-      const width = 58;
-      const top = `\x1b[1;36m╔${'═'.repeat(width - 2)}╗\x1b[0m`;
-      const mid = `\x1b[1;36m╟${'─'.repeat(width - 2)}╢\x1b[0m`;
-      const bot = `\x1b[1;36m╚${'═'.repeat(width - 2)}╝\x1b[0m`;
-      
-      const padCenter = (text: string, w: number): string => {
-        const visible = stripAnsi(text).length;
-        const padding = Math.floor((w - visible) / 2);
-        const left = ' '.repeat(Math.max(0, padding));
-        const right = ' '.repeat(Math.max(0, w - visible - padding));
-        return left + text + right;
-      };
-
-      const title = `\x1b[1;36m║\x1b[1;33m${padCenter('⚙  CURRENT RUNTIME OPTIONS', width - 2)}\x1b[1;36m║\x1b[0m`;
-      const formattedLines = configCardLines.map(line => {
-        const visibleLength = stripAnsi(line).length;
-        const padRight = Math.max(0, (width - 6) - visibleLength);
-        return `\x1b[1;36m║\x1b[0m  ${line}${' '.repeat(padRight)}  \x1b[1;36m║\x1b[0m`;
-      });
-      const card = [top, title, mid, ...formattedLines, bot].join('\n');
-      console.log('\n' + centerBlock(card) + '\n');
+    case '/config':
+      printConfigCard();
+      return;
+    case '/carrier': {
+      if (!arg) {
+        const cfg = loadConfig();
+        const preset = resolveActivePreset(cfg.carrier, cfg.baseUrl);
+        console.log(`\n  Carrier: \x1b[1;37m${preset.displayName}\x1b[0m (${cfg.carrier})`);
+        console.log(`  Base URL: \x1b[1;37m${cfg.baseUrl}\x1b[0m`);
+        console.log('  Switch: \x1b[1;33m/carrier <id>\x1b[0m  e.g. groq, openai, ollama\n');
+        return;
+      }
+      const id = normalizeCarrierId(arg);
+      switchCarrier(id);
+      const updated = loadConfig();
+      const preset = resolveActivePreset(updated.carrier, updated.baseUrl);
+      setActiveModel(updated.model);
+      console.log(`\x1b[32m  Carrier switched to ${preset.displayName} (${updated.baseUrl})\x1b[0m\n`);
+      return;
+    }
+    case '/models': {
+      const cfg = loadConfig();
+      const preset = resolveActivePreset(cfg.carrier, cfg.baseUrl);
+      console.log(`\n\x1b[1;36m  Models for ${preset.displayName}:\x1b[0m\n`);
+      const models = await listModels(preset, cfg.apiKey, { forceRefresh: arg === 'refresh' });
+      console.log(centerBlock(formatModelList(models, 25)) + '\n');
       return;
     }
     case '/status': {
       try {
-        const drift = await detectWorkspaceDrift(process.cwd());
+        const wsRoot = findWorkspaceRoot(process.cwd());
+        if (!wsRoot) {
+          console.log('\x1b[31m  Error: No active workspace. Run "getit manifest init" first.\x1b[0m\n');
+          return;
+        }
+        const drift = await detectWorkspaceDrift(wsRoot);
         const statusLines: string[] = [];
         statusLines.push(`\x1b[1;36mWorkspace Offline Drift Status:\x1b[0m`);
-        statusLines.push(`Active Workspace Root: \x1b[1;37m${process.cwd()}\x1b[0m\n`);
+        statusLines.push(`Active Workspace Root: \x1b[1;37m${wsRoot}\x1b[0m\n`);
         
         if (drift.files.length === 0) {
           statusLines.push(`\x1b[33mNo candidate config files detected. Run "getit manifest init" to initialize.\x1b[0m\n`);
@@ -525,6 +609,21 @@ async function handleSlashCommand(input: string, agent: AgentLoop, systemPrompt:
       }
       return;
     }
+    case '/export': {
+      try {
+        const wsRoot = findWorkspaceRoot(process.cwd());
+        if (!wsRoot) {
+          console.log('\x1b[31m  Error: No active workspace. Run "getit manifest init" first.\x1b[0m\n');
+          return;
+        }
+        const result = await exportScrubbedWorkspace(wsRoot, arg || undefined);
+        console.log(`\x1b[32m  ✓ Exported ${result.filesExported.length} scrubbed file(s) to:\x1b[0m`);
+        console.log(`  \x1b[1;37m${result.outputDir}\x1b[0m\n`);
+      } catch (err: any) {
+        console.log(`\x1b[31m  Error: ${err.message}\x1b[0m\n`);
+      }
+      return;
+    }
     case '/exit':
     case '/quit':
       printGoodbye();
@@ -551,17 +650,30 @@ async function handleSlashCommand(input: string, agent: AgentLoop, systemPrompt:
         console.log(`\x1b[31m  Error: ${err.message}\x1b[0m`);
       }
       return;
+    case '/log':
     case '/history': {
-      const messages = agent.getMessages();
-      console.log(`\n\x1b[1;36m  Conversation History Metrics:\x1b[0m`);
-      console.log(`  Total Messages:   \x1b[1;37m${messages.length}\x1b[0m`);
-      const userMsgs = messages.filter(m => m.role === 'user').length;
-      const assistantMsgs = messages.filter(m => m.role === 'assistant').length;
-      const toolMsgs = messages.filter(m => m.role === 'tool').length;
-      console.log(`  - User Turns:     \x1b[1;37m${userMsgs}\x1b[0m`);
-      console.log(`  - AI Invocations: \x1b[1;37m${assistantMsgs}\x1b[0m`);
-      console.log(`  - Tool Invocations:\x1b[1;37m${toolMsgs}\x1b[0m`);
-      console.log('');
+      const commits = WorkspaceHistoryManager.getHistory();
+      const card = WorkspaceHistoryManager.renderHistory(commits);
+      console.log('\n' + card + '\n');
+      return;
+    }
+    case '/rollback': {
+      if (!arg) {
+        console.log(`\x1b[31m  Error: Missing commit hash. Usage: /rollback <commit-hash> [file]\x1b[0m`);
+        return;
+      }
+      const parts = arg.trim().split(/\s+/);
+      const commitHash = parts[0];
+      const fileArg = parts[1];
+      try {
+        const diff = await WorkspaceRollbackManager.previewRollback(commitHash, fileArg);
+        console.log('\n' + centerLine(`\x1b[1;33mUnified Diff Preview (Scrubbed):\x1b[0m`, 32));
+        console.log(centerBlock(diff));
+        
+        await WorkspaceRollbackManager.executeRollback(commitHash, fileArg);
+      } catch (err: any) {
+        console.log(`\x1b[31m  Error during rollback: ${err.message}\x1b[0m`);
+      }
       return;
     }
     case '/model':
@@ -604,13 +716,70 @@ Examples:
   $ getit install ripgrep        # Run command one-shot and exit
   $ getit --dry-run install rg   # Show and approve a roadmap before running
   $ getit undo                   # Restore the latest restorable transaction
+  $ getit config                 # Show active carrier, model, and runtime options
+  $ getit doctor                 # Health check: carrier ping, git, gh
+  $ getit models                 # List models for the active carrier
   $ getit manifest init          # Initialize active local workspace
   $ getit status                 # Check offline workspace configuration drift
   $ getit status --remote        # Check workspace sync status against GitHub remote
   $ getit resolve                # Interactively resolve workspace configuration drift
   $ getit inspect .env           # Inspect credential-redacted tracking copy of config
+  $ getit export [dir]         # Export scrubbed mirror of all tracked files
   $ getit --model qwen/qwen3-coder:free
   `);
+}
+
+function printConfigCard(): void {
+  const currentConfig = loadConfig();
+  const preset = resolveActivePreset(currentConfig.carrier, currentConfig.baseUrl);
+  const configCardLines = [
+    `Carrier:         \x1b[1;37m${preset.displayName}\x1b[0m (${currentConfig.carrier})`,
+    `Base API URL:    \x1b[1;37m${currentConfig.baseUrl}\x1b[0m`,
+    `Tool Calling:    \x1b[1;37m${preset.supportsTools ? 'supported' : 'limited'}\x1b[0m`,
+    `Active Model:    \x1b[1;37m${getActiveModel()}\x1b[0m`,
+    `Exec Timeout:    \x1b[1;37m${getDefaultTimeout()}ms\x1b[0m`,
+    `Safety Profile:  \x1b[1;37m${getRuntimeSession().policyProfile}\x1b[0m`,
+    `Dry-Run Mode:    \x1b[1;37m${getRuntimeSession().dryRun ? 'enabled' : 'disabled'}\x1b[0m`,
+    `API Key:         \x1b[1;37m${currentConfig.apiKey ? '[CONFIGURED]' : preset.auth === 'none' ? '[NOT REQUIRED]' : '[MISSING]'}\x1b[0m`,
+  ];
+
+  const width = 58;
+  const top = `\x1b[1;36m╔${'═'.repeat(width - 2)}╗\x1b[0m`;
+  const mid = `\x1b[1;36m╟${'─'.repeat(width - 2)}╢\x1b[0m`;
+  const bot = `\x1b[1;36m╚${'═'.repeat(width - 2)}╝\x1b[0m`;
+
+  const padCenter = (text: string, w: number): string => {
+    const visible = stripAnsi(text).length;
+    const padding = Math.floor((w - visible) / 2);
+    return ' '.repeat(Math.max(0, padding)) + text + ' '.repeat(Math.max(0, w - visible - padding));
+  };
+
+  const title = `\x1b[1;36m║\x1b[1;33m${padCenter('CURRENT RUNTIME OPTIONS', width - 2)}\x1b[1;36m║\x1b[0m`;
+  const formattedLines = configCardLines.map((line) => {
+    const visibleLength = stripAnsi(line).length;
+    const padRight = Math.max(0, (width - 6) - visibleLength);
+    return `\x1b[1;36m║\x1b[0m  ${line}${' '.repeat(padRight)}  \x1b[1;36m║\x1b[0m`;
+  });
+  console.log('\n' + centerBlock([top, title, mid, ...formattedLines, bot].join('\n')) + '\n');
+}
+
+async function runDoctorCli(): Promise<void> {
+  console.log('\n\x1b[1;36m  Running getit doctor...\x1b[0m\n');
+  const checks = await runDoctorChecks();
+  for (const check of checks) {
+    const icon = check.ok ? '\x1b[32m✓\x1b[0m' : '\x1b[31m✗\x1b[0m';
+    console.log(`  ${icon} ${check.name.padEnd(22)} ${check.detail}`);
+  }
+  console.log('');
+}
+
+async function runModelsCli(): Promise<void> {
+  const cfg = loadConfig();
+  const preset = resolveActivePreset(cfg.carrier, cfg.baseUrl);
+  console.log(`\n\x1b[1;36m  Models for ${preset.displayName}:\x1b[0m\n`);
+  const models = await listModels(preset, cfg.apiKey, { forceRefresh: true });
+  console.log(formatModelList(models, 30));
+  console.log('');
 }
 
 function printHelp(): void {
@@ -626,7 +795,10 @@ function printHelp(): void {
     '│\x1b[0m  \x1b[1;37m/env\x1b[0m         Display discovered environment info      \x1b[1;36m│',
     '│\x1b[0m  \x1b[1;37m/reset\x1b[0m       Clear conversation context starting fresh\x1b[1;36m│',
     '│\x1b[0m  \x1b[1;37m/cd <path>\x1b[0m   Change stateful working directory        \x1b[1;36m│',
-    '│\x1b[0m  \x1b[1;37m/history\x1b[0m     Display session performance metrics      \x1b[1;36m│',
+    '│\x1b[0m  \x1b[1;37m/history\x1b[0m     Display shadow Git tracking history      \x1b[1;36m│',
+    '│\x1b[0m  \x1b[1;37m/rollback\x1b[0m    Roll back workspace to past commit       \x1b[1;36m│',
+    '│\x1b[0m  \x1b[1;37m/carrier\x1b[0m     Show or switch LLM provider             \x1b[1;36m│',
+    '│\x1b[0m  \x1b[1;37m/models\x1b[0m      List models for active carrier          \x1b[1;36m│',
     '│\x1b[0m  \x1b[1;37m/model\x1b[0m       Display or override the session model    \x1b[1;36m│',
     '│\x1b[0m  \x1b[1;37m/setup\x1b[0m       Interactive guided API key configuration \x1b[1;36m│',
     '│\x1b[0m  \x1b[1;37m/undo\x1b[0m        Restore latest restorable transaction     \x1b[1;36m│',
@@ -636,6 +808,7 @@ function printHelp(): void {
     '│\x1b[0m  \x1b[1;37m/status\x1b[0m      Display workspace drift status            \x1b[1;36m│',
     '│\x1b[0m  \x1b[1;37m/resolve\x1b[0m     Interactively resolve workspace drift    \x1b[1;36m│',
     '│\x1b[0m  \x1b[1;37m/sync\x1b[0m        Synchronize tracking repo to remote       \x1b[1;36m│',
+    '│\x1b[0m  \x1b[1;37m/export\x1b[0m      Export scrubbed copy of tracked files  \x1b[1;36m│',
     '│\x1b[0m                                                        \x1b[1;36m│',
     '│\x1b[0m  \x1b[2mYou can also type "exit" or press Ctrl+C to quit.\x1b[0m      \x1b[1;36m│',
     '│\x1b[0m  \x1b[2mAnything else is sent as a prompt to the AI agent.\x1b[0m     \x1b[1;36m│',
@@ -658,8 +831,10 @@ function printEnvironment(): void {
   console.log(`  Dependencies:   ${deps}`);
   const pathStatus = env.localBinInPath ? '\x1b[32mRegistered ✓\x1b[0m' : '\x1b[31mNOT in PATH ✗\x1b[0m';
   console.log(`  ~/.local/bin:   ${pathStatus}`);
-  const keyStatus = process.env.OPENROUTER_API_KEY ? '\x1b[32mConfigured ✓\x1b[0m' : '\x1b[31mMissing ✗\x1b[0m';
+  const cfg = loadConfig();
+  const keyStatus = cfg.apiKey ? '\x1b[32mConfigured ✓\x1b[0m' : '\x1b[31mMissing ✗\x1b[0m';
   console.log(`  API Key:        ${keyStatus}`);
+  console.log(`  Carrier:        \x1b[1;37m${cfg.carrier}\x1b[0m`);
   console.log(`  Active Model:   \x1b[1;37m${getActiveModel()}\x1b[0m`);
   console.log(`  Exec Timeout:   \x1b[1;37m${getDefaultTimeout()}ms\x1b[0m`);
   console.log(`  Stateful CWD:   \x1b[1;37m${getActiveCwd()}\x1b[0m`);
@@ -736,9 +911,14 @@ async function handleWorkspaceCli(positionals: string[], values: any) {
   if (cmd === 'status') {
     const isRemote = positionals.includes('--remote') || process.argv.includes('--remote');
     try {
-      const drift = await detectWorkspaceDrift(process.cwd());
+      const wsRoot = findWorkspaceRoot(process.cwd());
+      if (!wsRoot) {
+        console.error(`\x1b[31mError: No active workspace found. Run "getit manifest init" first.\x1b[0m`);
+        process.exit(1);
+      }
+      const drift = await detectWorkspaceDrift(wsRoot);
       console.log(`\n\x1b[1;36m  Workspace Offline Drift Status:\x1b[0m`);
-      console.log(`  Active Workspace Root: \x1b[1;37m${process.cwd()}\x1b[0m\n`);
+      console.log(`  Active Workspace Root: \x1b[1;37m${wsRoot}\x1b[0m\n`);
       
       if (drift.files.length === 0) {
         console.log(`  \x1b[33mNo candidate config files detected. Run "getit manifest init" to initialize.\x1b[0m\n`);
@@ -783,6 +963,24 @@ async function handleWorkspaceCli(positionals: string[], values: any) {
     }
   }
 
+  if (cmd === 'export') {
+    const outputDir = positionals[1];
+    try {
+      const wsRoot = findWorkspaceRoot(process.cwd());
+      if (!wsRoot) {
+        console.error(`\x1b[31mError: No active workspace found. Run "getit manifest init" first.\x1b[0m`);
+        process.exit(1);
+      }
+      const result = await exportScrubbedWorkspace(wsRoot, outputDir);
+      console.log(`\n\x1b[32m✓ Exported ${result.filesExported.length} scrubbed file(s)\x1b[0m`);
+      console.log(`  Output: \x1b[1;37m${result.outputDir}\x1b[0m\n`);
+      process.exit(0);
+    } catch (err: any) {
+      console.error(`\x1b[31mError: ${err.message}\x1b[0m`);
+      process.exit(1);
+    }
+  }
+
   if (cmd === 'inspect') {
     const file = positionals[1];
     if (!file) {
@@ -810,6 +1008,38 @@ async function handleWorkspaceCli(positionals: string[], values: any) {
       }
       await runWorkspaceResolve(workspaceRoot);
       closeReadlineInterface();
+      process.exit(0);
+    } catch (err: any) {
+      console.error(`\x1b[31mError: ${err.message}\x1b[0m`);
+      process.exit(1);
+    }
+  }
+
+  if (cmd === 'history' || cmd === 'log') {
+    try {
+      const commits = WorkspaceHistoryManager.getHistory();
+      const card = WorkspaceHistoryManager.renderHistory(commits);
+      console.log('\n' + card + '\n');
+      process.exit(0);
+    } catch (err: any) {
+      console.error(`\x1b[31mError: ${err.message}\x1b[0m`);
+      process.exit(1);
+    }
+  }
+
+  if (cmd === 'rollback') {
+    const commitHash = positionals[1];
+    const fileArg = positionals[2];
+    if (!commitHash) {
+      console.error(`\x1b[31mError: Missing commit hash. Usage: getit rollback <commit-hash> [file]\x1b[0m`);
+      process.exit(1);
+    }
+    try {
+      const diff = await WorkspaceRollbackManager.previewRollback(commitHash, fileArg);
+      console.log('\n' + centerLine(`\x1b[1;33mUnified Diff Preview (Scrubbed):\x1b[0m`, 32));
+      console.log(centerBlock(diff));
+
+      await WorkspaceRollbackManager.executeRollback(commitHash, fileArg);
       process.exit(0);
     } catch (err: any) {
       console.error(`\x1b[31mError: ${err.message}\x1b[0m`);

@@ -1,8 +1,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import * as crypto from 'node:crypto';
-import { loadWorkspaceManifest, WorkspaceManifest } from './manifest.js';
-import { scrubContentGeneric } from './tracking.js';
+import { readFile } from 'node:fs/promises';
+import { loadWorkspaceManifest, WorkspaceManifest, computeScrubbedHash, CONFIG_CANDIDATES } from './manifest.js';
+import { collectProfileCandidatePaths } from './profiles.js';
 
 export interface FileDriftStatus {
   path: string;
@@ -16,100 +16,93 @@ export interface DriftResult {
   files: FileDriftStatus[];
 }
 
+const HASH_BATCH_SIZE = 32;
+
+async function evaluateTrackedEntry(
+  workspaceRoot: string,
+  relPath: string,
+  meta: { hash: string }
+): Promise<FileDriftStatus> {
+  const liveFile = path.join(workspaceRoot, relPath);
+
+  if (!fs.existsSync(liveFile)) {
+    return { path: relPath, status: 'missing', manifestHash: meta.hash };
+  }
+
+  try {
+    const liveContent = await readFile(liveFile, 'utf-8');
+    const liveHash = computeScrubbedHash(liveContent);
+
+    if (liveHash !== meta.hash) {
+      return {
+        path: relPath,
+        status: 'modified',
+        liveHash,
+        manifestHash: meta.hash
+      };
+    }
+    return {
+      path: relPath,
+      status: 'unmodified',
+      liveHash,
+      manifestHash: meta.hash
+    };
+  } catch {
+    return { path: relPath, status: 'missing', manifestHash: meta.hash };
+  }
+}
+
 /**
  * Computes and compares live scrubbed file hashes against the workspace manifest.
- * Reports on all modified, missing, and untracked config candidates.
+ * Uses batched async I/O for tracked paths (DRF_002).
  */
 export async function detectWorkspaceDrift(workspaceRoot: string): Promise<DriftResult> {
   let manifest: WorkspaceManifest;
   try {
     manifest = loadWorkspaceManifest(workspaceRoot);
-  } catch (err) {
+  } catch {
     throw new Error(`Drift check failed: active workspace manifest not found in ${workspaceRoot}`);
   }
 
   const result: FileDriftStatus[] = [];
   let hasDrift = false;
 
-  // 1. Evaluate tracked files in manifest
-  for (const [relPath, meta] of Object.entries(manifest.trackedPaths)) {
-    const liveFile = path.join(workspaceRoot, relPath);
-    if (!fs.existsSync(liveFile)) {
-      result.push({
-        path: relPath,
-        status: 'missing',
-        manifestHash: meta.hash
-      });
-      hasDrift = true;
-      continue;
-    }
+  const trackedEntries = Object.entries(manifest.trackedPaths);
 
-    try {
-      const liveContent = fs.readFileSync(liveFile, 'utf-8');
-      const scrubbedContent = scrubContentGeneric(liveContent);
-      const liveHash = crypto.createHash('sha256').update(scrubbedContent, 'utf-8').digest('hex');
+  for (let i = 0; i < trackedEntries.length; i += HASH_BATCH_SIZE) {
+    const batch = trackedEntries.slice(i, i + HASH_BATCH_SIZE);
+    const batchResults = await Promise.all(
+      batch.map(([relPath, meta]) => evaluateTrackedEntry(workspaceRoot, relPath, meta))
+    );
 
-      if (liveHash !== meta.hash) {
-        result.push({
-          path: relPath,
-          status: 'modified',
-          liveHash,
-          manifestHash: meta.hash
-        });
+    for (const fileStatus of batchResults) {
+      result.push(fileStatus);
+      if (fileStatus.status !== 'unmodified') {
         hasDrift = true;
-      } else {
-        result.push({
-          path: relPath,
-          status: 'unmodified',
-          liveHash,
-          manifestHash: meta.hash
-        });
       }
-    } catch {
-      // Treat read failures as missing/inaccessible
-      result.push({
-        path: relPath,
-        status: 'missing',
-        manifestHash: meta.hash
-      });
-      hasDrift = true;
     }
   }
 
-  // 2. Discover candidates that exist on disk but are not tracked in the manifest
-  const candidates = [
-    'package.json',
-    'Cargo.toml',
-    'pyproject.toml',
-    'go.mod',
-    '.nvmrc',
-    '.getitignore',
-    '.env',
-    '.gitignore',
-    'README.md'
-  ];
+  const profileCandidates = collectProfileCandidatePaths(workspaceRoot, manifest.fingerprint);
+  const allCandidates = [...CONFIG_CANDIDATES, ...profileCandidates];
 
-  for (const candidate of candidates) {
+  for (const candidate of allCandidates) {
     if (manifest.trackedPaths[candidate]) {
-      continue; // already tracked
+      continue;
     }
     const liveFile = path.join(workspaceRoot, candidate);
     if (fs.existsSync(liveFile)) {
       try {
         const stat = fs.statSync(liveFile);
         if (stat.isFile()) {
-          result.push({
-            path: candidate,
-            status: 'untracked'
-          });
+          result.push({ path: candidate, status: 'untracked' });
           hasDrift = true;
         }
-      } catch {}
+      } catch {
+        // skip inaccessible candidates
+      }
     }
   }
 
-  return {
-    hasDrift,
-    files: result
-  };
+  return { hasDrift, files: result };
 }
