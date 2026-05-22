@@ -20,6 +20,7 @@ import { inspectTrackedFile, stageToTracking, getTrackingRoot, scrubContentGener
 import { checkRemoteStatus, syncWithRemote } from './workspace/remote.js';
 import { findWorkspaceRoot } from './workspace/boundary.js';
 import { generateDiffPreview } from './tools/diff.js';
+import { centerBlock, centerLine, centerPrompt } from './ui/layout.js';
 
 // Dynamic version loader resolving relative to both source and compiled dist paths
 function getVersion(): string {
@@ -50,7 +51,7 @@ async function runWorkspaceResolve(workspaceRoot: string): Promise<void> {
   const drift = await detectWorkspaceDrift(workspaceRoot);
   const filesToResolve = drift.files.filter(f => f.status !== 'unmodified');
   if (filesToResolve.length === 0) {
-    console.log('\x1b[32m  ✓ No workspace drift detected. Everything is up to date!\x1b[0m\n');
+    console.log(centerLine('\x1b[32m  ✓ No workspace drift detected. Everything is up to date!\x1b[0m\n', 54));
     return;
   }
 
@@ -58,7 +59,8 @@ async function runWorkspaceResolve(workspaceRoot: string): Promise<void> {
   const rl = getReadlineInterface();
 
   for (const file of filesToResolve) {
-    console.log(`\n\x1b[1;36mFound ${file.status} file: ${file.path}\x1b[0m`);
+    const header = `Found ${file.status} file: ${file.path}`;
+    console.log('\n' + centerLine(`\x1b[1;36m${header}\x1b[0m`, header.length));
 
     if (file.status === 'modified') {
       try {
@@ -68,10 +70,11 @@ async function runWorkspaceResolve(workspaceRoot: string): Promise<void> {
         const trackedContent = await inspectTrackedFile(workspaceRoot, file.path);
         
         const diff = generateDiffPreview(trackedContent, liveScrubbed);
-        console.log(`\x1b[1;33mUnified Diff Preview (Scrubbed):\x1b[0m`);
-        console.log(diff);
+        console.log(centerLine(`\x1b[1;33mUnified Diff Preview (Scrubbed):\x1b[0m`, 32));
+        console.log(centerBlock(diff));
         
-        const answer = await rl.question(`\x1b[1;36mStage and track these changes for ${file.path}? [y/N] ❯ \x1b[0m`);
+        const prompt = centerPrompt(`\x1b[1;36mStage and track these changes for ${file.path}? [y/N] ❯ \x1b[0m`);
+        const answer = await rl.question(prompt);
         if (answer.trim().toLowerCase() === 'y') {
           await stageToTracking(workspaceRoot, file.path);
           
@@ -82,12 +85,12 @@ async function runWorkspaceResolve(workspaceRoot: string): Promise<void> {
             mtime: stat.mtimeMs
           };
           saveWorkspaceManifest(workspaceRoot, manifest);
-          console.log(`\x1b[32m  ✓ Staged and updated tracking for ${file.path}\x1b[0m`);
+          console.log(centerLine(`\x1b[32m  ✓ Staged and updated tracking for ${file.path}\x1b[0m`, file.path.length + 37));
         } else {
-          console.log(`\x1b[33m  Skipped ${file.path}\x1b[0m`);
+          console.log(centerLine(`\x1b[33m  Skipped ${file.path}\x1b[0m`, file.path.length + 10));
         }
       } catch (err: any) {
-        console.error(`\x1b[31m  Error resolving modified file ${file.path}: ${err.message}\x1b[0m`);
+        console.error(centerLine(`\x1b[31m  Error resolving modified file ${file.path}: ${err.message}\x1b[0m`, file.path.length + err.message.length + 42));
       }
     } else if (file.status === 'untracked') {
       try {
@@ -95,10 +98,11 @@ async function runWorkspaceResolve(workspaceRoot: string): Promise<void> {
         const liveRaw = readFileSync(livePath, 'utf-8');
         const liveScrubbed = scrubContentGeneric(liveRaw);
         
-        console.log(`\x1b[1;33mScrubbed Content Preview:\x1b[0m`);
-        console.log(liveScrubbed);
+        console.log(centerLine(`\x1b[1;33mScrubbed Content Preview:\x1b[0m`, 25));
+        console.log(centerBlock(liveScrubbed));
         
-        const answer = await rl.question(`\x1b[1;36mStart tracking untracked file ${file.path}? [y/N] ❯ \x1b[0m`);
+        const prompt = centerPrompt(`\x1b[1;36mStart tracking untracked file ${file.path}? [y/N] ❯ \x1b[0m`);
+        const answer = await rl.question(prompt);
         if (answer.trim().toLowerCase() === 'y') {
           await stageToTracking(workspaceRoot, file.path);
           
@@ -109,16 +113,17 @@ async function runWorkspaceResolve(workspaceRoot: string): Promise<void> {
             mtime: stat.mtimeMs
           };
           saveWorkspaceManifest(workspaceRoot, manifest);
-          console.log(`\x1b[32m  ✓ Staged and started tracking for ${file.path}\x1b[0m`);
+          console.log(centerLine(`\x1b[32m  ✓ Staged and started tracking for ${file.path}\x1b[0m`, file.path.length + 37));
         } else {
-          console.log(`\x1b[33m  Skipped ${file.path}\x1b[0m`);
+          console.log(centerLine(`\x1b[33m  Skipped ${file.path}\x1b[0m`, file.path.length + 10));
         }
       } catch (err: any) {
-        console.error(`\x1b[31m  Error resolving untracked file ${file.path}: ${err.message}\x1b[0m`);
+        console.error(centerLine(`\x1b[31m  Error resolving untracked file ${file.path}: ${err.message}\x1b[0m`, file.path.length + err.message.length + 43));
       }
     } else if (file.status === 'missing') {
       try {
-        const answer = await rl.question(`\x1b[1;36mStop tracking missing file ${file.path}? [y/N] ❯ \x1b[0m`);
+        const prompt = centerPrompt(`\x1b[1;36mStop tracking missing file ${file.path}? [y/N] ❯ \x1b[0m`);
+        const answer = await rl.question(prompt);
         if (answer.trim().toLowerCase() === 'y') {
           delete manifest.trackedPaths[file.path];
           saveWorkspaceManifest(workspaceRoot, manifest);
@@ -133,12 +138,12 @@ async function runWorkspaceResolve(workspaceRoot: string): Promise<void> {
             execSync(`git rm "${file.path}"`, { cwd: trackingRoot, stdio: 'ignore' });
             execSync(`git commit -m "Tracked configuration removal: ${file.path}"`, { cwd: trackingRoot, stdio: 'ignore' });
           } catch {}
-          console.log(`\x1b[32m  ✓ Stopped tracking and deleted mirror for ${file.path}\x1b[0m`);
+          console.log(centerLine(`\x1b[32m  ✓ Stopped tracking and deleted mirror for ${file.path}\x1b[0m`, file.path.length + 47));
         } else {
-          console.log(`\x1b[33m  Skipped ${file.path}\x1b[0m`);
+          console.log(centerLine(`\x1b[33m  Skipped ${file.path}\x1b[0m`, file.path.length + 10));
         }
       } catch (err: any) {
-        console.error(`\x1b[31m  Error resolving missing file ${file.path}: ${err.message}\x1b[0m`);
+        console.error(centerLine(`\x1b[31m  Error resolving missing file ${file.path}: ${err.message}\x1b[0m`, file.path.length + err.message.length + 41));
       }
     }
   }
@@ -319,24 +324,27 @@ async function bootstrap() {
     }
   }
 
-  console.log(`\n\x1b[1;36m┌────────────────────────────────────────────────────────┐`);
-  console.log(`│ \x1b[1;32mGETIT WORKSPACE AGENT v${getVersion().padEnd(10)}\x1b[1;36m                         │`);
-  console.log(`├────────────────────────────────────────────────────────┤`);
+  const welcomeLines: string[] = [];
+  welcomeLines.push(`┌────────────────────────────────────────────────────────┐`);
+  welcomeLines.push(`│ \x1b[1;32mGETIT WORKSPACE AGENT v${getVersion().padEnd(10)}\x1b[1;36m                         │`);
+  welcomeLines.push(`├────────────────────────────────────────────────────────┤`);
   if (workspaceWarning) {
-    process.stdout.write(workspaceWarning);
+    welcomeLines.push(...workspaceWarning.trim().split('\n'));
   }
-  console.log(`│ \x1b[1;37mArchitecture:\x1b[0m  ${env.arch.padEnd(40)} \x1b[1;36m│`);
-  console.log(`│ \x1b[1;37mPlatform:\x1b[0m      ${env.osName.padEnd(40)} \x1b[1;36m│`);
+  welcomeLines.push(`│ \x1b[1;37mArchitecture:\x1b[0m  ${env.arch.padEnd(40)} \x1b[1;36m│`);
+  welcomeLines.push(`│ \x1b[1;37mPlatform:\x1b[0m      ${env.osName.padEnd(40)} \x1b[1;36m│`);
   
   const deps = Object.entries(env.binaries)
     .map(([k, v]) => `${k}:${v ? '✓' : '✗'}`)
     .join(' ');
-  console.log(`│ \x1b[1;37mDependencies:\x1b[0m  ${deps.padEnd(40)} \x1b[1;36m│`);
+  welcomeLines.push(`│ \x1b[1;37mDependencies:\x1b[0m  ${deps.padEnd(40)} \x1b[1;36m│`);
   
   const pathStatus = env.localBinInPath ? 'Registered ✓' : 'NOT in PATH ✗';
-  console.log(`│ \x1b[1;37m~/.local/bin:\x1b[0m  ${pathStatus.padEnd(40)} \x1b[1;36m│`);
-  console.log(`└────────────────────────────────────────────────────────┘\x1b[0m`);
-  console.log('Type \x1b[1;33m/help\x1b[0m for available commands.\n');
+  welcomeLines.push(`│ \x1b[1;37m~/.local/bin:\x1b[0m  ${pathStatus.padEnd(40)} \x1b[1;36m│`);
+  welcomeLines.push(`└────────────────────────────────────────────────────────┘`);
+
+  console.log('\n' + centerBlock(welcomeLines.join('\n')));
+  console.log(centerLine('Type \x1b[1;33m/help\x1b[0m for available commands.', 38) + '\n');
 
   const rl = getReadlineInterface();
 
@@ -349,7 +357,7 @@ async function bootstrap() {
 
   // Handle standard 'exit' command or EOF (Ctrl+D)
   while (true) {
-    const promptString = 'getit-agent ❯ ';
+    const promptString = centerPrompt('getit-agent ❯ ');
     
     try {
       const input = await rl.question(promptString);
@@ -424,14 +432,15 @@ async function handleSlashCommand(input: string, agent: AgentLoop, systemPrompt:
     case '/status': {
       try {
         const drift = await detectWorkspaceDrift(process.cwd());
-        console.log(`\n\x1b[1;36m  Workspace Offline Drift Status:\x1b[0m`);
-        console.log(`  Active Workspace Root: \x1b[1;37m${process.cwd()}\x1b[0m\n`);
+        const statusLines: string[] = [];
+        statusLines.push(`\x1b[1;36mWorkspace Offline Drift Status:\x1b[0m`);
+        statusLines.push(`Active Workspace Root: \x1b[1;37m${process.cwd()}\x1b[0m\n`);
         
         if (drift.files.length === 0) {
-          console.log(`  \x1b[33mNo candidate config files detected. Run "getit manifest init" to initialize.\x1b[0m\n`);
+          statusLines.push(`\x1b[33mNo candidate config files detected. Run "getit manifest init" to initialize.\x1b[0m\n`);
         } else {
-          console.log(`  \x1b[1;37mStatus     Path\x1b[0m`);
-          console.log(`  ────────── ───────────────────────────────────────────────────`);
+          statusLines.push(`\x1b[1;37mStatus     Path\x1b[0m`);
+          statusLines.push(`────────── ───────────────────────────────────────────────────`);
           for (const file of drift.files) {
             let statusColor = '\x1b[37m';
             if (file.status === 'modified') statusColor = '\x1b[1;31m';
@@ -439,12 +448,12 @@ async function handleSlashCommand(input: string, agent: AgentLoop, systemPrompt:
             else if (file.status === 'untracked') statusColor = '\x1b[1;33m';
             else if (file.status === 'unmodified') statusColor = '\x1b[32m';
 
-            console.log(`  ${statusColor}${file.status.padEnd(10)}\x1b[0m ${file.path}`);
+            statusLines.push(`${statusColor}${file.status.padEnd(10)}\x1b[0m ${file.path}`);
           }
-          console.log('');
         }
+        console.log('\n' + centerBlock(statusLines.join('\n')) + '\n');
       } catch (err: any) {
-        console.log(`\x1b[31m  Error: ${err.message}\x1b[0m`);
+        console.log(centerLine(`\x1b[31mError: ${err.message}\x1b[0m`, err.message.length + 7));
       }
       return;
     }
@@ -562,33 +571,35 @@ Examples:
 }
 
 function printHelp(): void {
-  console.log('');
-  console.log('\x1b[1;36m┌────────────────────────────────────────────────────────┐');
-  console.log('│ \x1b[1;33mAVAILABLE COMMANDS\x1b[1;36m                                     │');
-  console.log('├────────────────────────────────────────────────────────┤');
-  console.log('│\x1b[0m                                                        \x1b[1;36m│');
-  console.log('│\x1b[0m  \x1b[1;37m/help\x1b[0m        Show this help menu                      \x1b[1;36m│');
-  console.log('│\x1b[0m  \x1b[1;37m/exit\x1b[0m        Exit the agent session                   \x1b[1;36m│');
-  console.log('│\x1b[0m  \x1b[1;37m/quit\x1b[0m        Alias for /exit                          \x1b[1;36m│');
-  console.log('│\x1b[0m  \x1b[1;37m/clear\x1b[0m       Clear the terminal screen                \x1b[1;36m│');
-  console.log('│\x1b[0m  \x1b[1;37m/env\x1b[0m         Display discovered environment info      \x1b[1;36m│');
-  console.log('│\x1b[0m  \x1b[1;37m/reset\x1b[0m       Clear conversation context starting fresh\x1b[1;36m│');
-  console.log('│\x1b[0m  \x1b[1;37m/cd <path>\x1b[0m   Change stateful working directory        \x1b[1;36m│');
-  console.log('│\x1b[0m  \x1b[1;37m/history\x1b[0m     Display session performance metrics      \x1b[1;36m│');
-  console.log('│\x1b[0m  \x1b[1;37m/model\x1b[0m       Display or override the session model    \x1b[1;36m│');
-  console.log('│\x1b[0m  \x1b[1;37m/setup\x1b[0m       Interactive guided API key configuration \x1b[1;36m│');
-  console.log('│\x1b[0m  \x1b[1;37m/undo\x1b[0m        Restore latest restorable transaction     \x1b[1;36m│');
-  console.log('│\x1b[0m  \x1b[1;37m/dry-run\x1b[0m     Show or toggle dry-run mode               \x1b[1;36m│');
-  console.log('│\x1b[0m  \x1b[1;37m/policy\x1b[0m      Display active policy profile             \x1b[1;36m│');
-  console.log('│\x1b[0m  \x1b[1;37m/status\x1b[0m      Display workspace drift status            \x1b[1;36m│');
-  console.log('│\x1b[0m  \x1b[1;37m/resolve\x1b[0m     Interactively resolve workspace drift    \x1b[1;36m│');
-  console.log('│\x1b[0m  \x1b[1;37m/sync\x1b[0m        Synchronize tracking repo to remote       \x1b[1;36m│');
-  console.log('│\x1b[0m                                                        \x1b[1;36m│');
-  console.log('│\x1b[0m  \x1b[2mYou can also type "exit" or press Ctrl+C to quit.\x1b[0m      \x1b[1;36m│');
-  console.log('│\x1b[0m  \x1b[2mAnything else is sent as a prompt to the AI agent.\x1b[0m     \x1b[1;36m│');
-  console.log('│\x1b[0m                                                        \x1b[1;36m│');
-  console.log('└────────────────────────────────────────────────────────┘\x1b[0m');
-  console.log('');
+  const helpBlock = [
+    '┌────────────────────────────────────────────────────────┐',
+    '│ \x1b[1;33mAVAILABLE COMMANDS\x1b[1;36m                                     │',
+    '├────────────────────────────────────────────────────────┤',
+    '│\x1b[0m                                                        \x1b[1;36m│',
+    '│\x1b[0m  \x1b[1;37m/help\x1b[0m        Show this help menu                      \x1b[1;36m│',
+    '│\x1b[0m  \x1b[1;37m/exit\x1b[0m        Exit the agent session                   \x1b[1;36m│',
+    '│\x1b[0m  \x1b[1;37m/quit\x1b[0m        Alias for /exit                          \x1b[1;36m│',
+    '│\x1b[0m  \x1b[1;37m/clear\x1b[0m       Clear the terminal screen                \x1b[1;36m│',
+    '│\x1b[0m  \x1b[1;37m/env\x1b[0m         Display discovered environment info      \x1b[1;36m│',
+    '│\x1b[0m  \x1b[1;37m/reset\x1b[0m       Clear conversation context starting fresh\x1b[1;36m│',
+    '│\x1b[0m  \x1b[1;37m/cd <path>\x1b[0m   Change stateful working directory        \x1b[1;36m│',
+    '│\x1b[0m  \x1b[1;37m/history\x1b[0m     Display session performance metrics      \x1b[1;36m│',
+    '│\x1b[0m  \x1b[1;37m/model\x1b[0m       Display or override the session model    \x1b[1;36m│',
+    '│\x1b[0m  \x1b[1;37m/setup\x1b[0m       Interactive guided API key configuration \x1b[1;36m│',
+    '│\x1b[0m  \x1b[1;37m/undo\x1b[0m        Restore latest restorable transaction     \x1b[1;36m│',
+    '│\x1b[0m  \x1b[1;37m/dry-run\x1b[0m     Show or toggle dry-run mode               \x1b[1;36m│',
+    '│\x1b[0m  \x1b[1;37m/policy\x1b[0m      Display active policy profile             \x1b[1;36m│',
+    '│\x1b[0m  \x1b[1;37m/status\x1b[0m      Display workspace drift status            \x1b[1;36m│',
+    '│\x1b[0m  \x1b[1;37m/resolve\x1b[0m     Interactively resolve workspace drift    \x1b[1;36m│',
+    '│\x1b[0m  \x1b[1;37m/sync\x1b[0m        Synchronize tracking repo to remote       \x1b[1;36m│',
+    '│\x1b[0m                                                        \x1b[1;36m│',
+    '│\x1b[0m  \x1b[2mYou can also type "exit" or press Ctrl+C to quit.\x1b[0m      \x1b[1;36m│',
+    '│\x1b[0m  \x1b[2mAnything else is sent as a prompt to the AI agent.\x1b[0m     \x1b[1;36m│',
+    '│\x1b[0m                                                        \x1b[1;36m│',
+    '└────────────────────────────────────────────────────────┘'
+  ].join('\n');
+
+  console.log('\n' + centerBlock(helpBlock) + '\n');
 }
 
 function printEnvironment(): void {
