@@ -9,6 +9,7 @@ import { assertPathAllowed, resolveRealPath } from '../security/path-policy.js';
 import { executeCommandAsync } from '../execution/async-process.js';
 import { recordCommand } from '../backup/shadow-store.js';
 import { attemptDependencyHealing } from '../workspace/healer.js';
+import { scrubText, MaskingSession } from '../security/scrubber.js';
 
 // Stateful working directory tracking across asynchronous turns
 let activeCwd = process.cwd();
@@ -96,7 +97,13 @@ export async function executeBash(command: string, workingDirectory?: string): P
   }
   
   // 3. Stage 1: MITL Interceptor
-  const mitlResult = await interceptToolCall('BASH', command, sanitization.warnings);
+  const warnings = [...sanitization.warnings];
+  const scanSession = new MaskingSession();
+  const commandScrubbed = scrubText(command, scanSession);
+  if (commandScrubbed !== command) {
+    warnings.push("PRE-EXECUTION SECRET DETECTED: This command contains a raw credential or high-entropy secret!");
+  }
+  const mitlResult = await interceptToolCall('BASH', command, warnings);
   
   if (!mitlResult.approved) {
     return {
@@ -192,6 +199,7 @@ export async function executeBash(command: string, workingDirectory?: string): P
   }
 
   const errMsg = result.error || `Command exited with code ${result.exitCode}.`;
+  const diagnosticMessage = `[Healer Note: This error did not match any automated healing rules. Please review the stderr logs to identify if a system dependency or config is missing and run a corrective command.]`;
   return {
     stdout: result.stdout,
     stderr: result.stderr,
@@ -199,6 +207,6 @@ export async function executeBash(command: string, workingDirectory?: string): P
     contextStderr: result.contextStderr,
     exitCode: result.exitCode,
     haltTurn: true,
-    error: `${errMsg}. Stderr: ${result.contextStderr || result.stderr}`
+    error: `${errMsg}. Stderr: ${result.contextStderr || result.stderr}\n${diagnosticMessage}`
   };
 }

@@ -5,7 +5,7 @@ import { interceptToolCall } from '../mitl/interceptor.js';
 import { generateDiffPreview } from './diff.js';
 import { snapshotBeforeWrite } from '../backup/shadow-store.js';
 import { getRuntimeSession } from '../runtime/session.js';
-import { scrubText } from '../security/scrubber.js';
+import { scrubText, MaskingSession } from '../security/scrubber.js';
 
 export interface FileOperationResult {
   success: boolean;
@@ -60,7 +60,13 @@ export async function manageFile(
       assertPathAllowed(dirName);
 
       // Stage 1: MITL Gate
-      const mitlResult = await interceptToolCall('FILE CREATE', content);
+      const warnings: string[] = [];
+      const scanSession = new MaskingSession();
+      const scrubbed = scrubText(content, scanSession);
+      if (scrubbed !== content) {
+        warnings.push("PRE-WRITE SECRET DETECTED: This file content contains raw credentials or a high-entropy secret (will be scrubbed to [REDACTED_SECRET] in tracking mirror)!");
+      }
+      const mitlResult = await interceptToolCall('FILE CREATE', content, warnings);
       if (!mitlResult.approved) {
         return { success: false, error: 'File creation denied by user.' };
       }
@@ -120,7 +126,13 @@ export async function manageFile(
       console.log(diffPreview);
 
       // Stage 1: MITL Gate (pass modifiedContent as the edit payload)
-      const mitlResult = await interceptToolCall('FILE PATCH', diffPreview, [], modifiedContent);
+      const warnings: string[] = [];
+      const scanSession = new MaskingSession();
+      const scrubbed = scrubText(modifiedContent, scanSession);
+      if (scrubbed !== modifiedContent) {
+        warnings.push("PRE-WRITE SECRET DETECTED: This file content contains raw credentials or a high-entropy secret (will be scrubbed to [REDACTED_SECRET] in tracking mirror)!");
+      }
+      const mitlResult = await interceptToolCall('FILE PATCH', diffPreview, warnings, modifiedContent);
       if (!mitlResult.approved) {
         return { success: false, error: 'File patching denied by user.' };
       }

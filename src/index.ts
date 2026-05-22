@@ -1,5 +1,5 @@
 import { parseArgs } from 'node:util';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, statSync, unlinkSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { getReadlineInterface, closeReadlineInterface, interceptToolCall } from './mitl/interceptor.js';
@@ -14,10 +14,12 @@ import { configureRuntimeSession, getRuntimeSession, PolicyProfile } from './run
 import { renderRoadmap } from './planning/plan-queue.js';
 import { executePlannedCall } from './tools/registry.js';
 import { undoLatestTransaction } from './backup/shadow-store.js';
-import { initWorkspaceManifest } from './workspace/manifest.js';
+import { initWorkspaceManifest, loadWorkspaceManifest, saveWorkspaceManifest, computeScrubbedHash } from './workspace/manifest.js';
 import { detectWorkspaceDrift } from './workspace/drift.js';
-import { inspectTrackedFile } from './workspace/tracking.js';
+import { inspectTrackedFile, stageToTracking, getTrackingRoot, scrubContentGeneric } from './workspace/tracking.js';
 import { checkRemoteStatus, syncWithRemote } from './workspace/remote.js';
+import { findWorkspaceRoot } from './workspace/boundary.js';
+import { generateDiffPreview } from './tools/diff.js';
 
 // Dynamic version loader resolving relative to both source and compiled dist paths
 function getVersion(): string {
@@ -42,6 +44,105 @@ function getVersion(): string {
     // Fallback if not found
   }
   return '1.0.0';
+}
+
+async function runWorkspaceResolve(workspaceRoot: string): Promise<void> {
+  const drift = await detectWorkspaceDrift(workspaceRoot);
+  const filesToResolve = drift.files.filter(f => f.status !== 'unmodified');
+  if (filesToResolve.length === 0) {
+    console.log('\x1b[32m  ✓ No workspace drift detected. Everything is up to date!\x1b[0m\n');
+    return;
+  }
+
+  const manifest = loadWorkspaceManifest(workspaceRoot);
+  const rl = getReadlineInterface();
+
+  for (const file of filesToResolve) {
+    console.log(`\n\x1b[1;36mFound ${file.status} file: ${file.path}\x1b[0m`);
+
+    if (file.status === 'modified') {
+      try {
+        const livePath = join(workspaceRoot, file.path);
+        const liveRaw = readFileSync(livePath, 'utf-8');
+        const liveScrubbed = scrubContentGeneric(liveRaw);
+        const trackedContent = await inspectTrackedFile(workspaceRoot, file.path);
+        
+        const diff = generateDiffPreview(trackedContent, liveScrubbed);
+        console.log(`\x1b[1;33mUnified Diff Preview (Scrubbed):\x1b[0m`);
+        console.log(diff);
+        
+        const answer = await rl.question(`\x1b[1;36mStage and track these changes for ${file.path}? [y/N] ❯ \x1b[0m`);
+        if (answer.trim().toLowerCase() === 'y') {
+          await stageToTracking(workspaceRoot, file.path);
+          
+          const stat = statSync(livePath);
+          manifest.trackedPaths[file.path] = {
+            hash: computeScrubbedHash(liveRaw),
+            mode: stat.mode,
+            mtime: stat.mtimeMs
+          };
+          saveWorkspaceManifest(workspaceRoot, manifest);
+          console.log(`\x1b[32m  ✓ Staged and updated tracking for ${file.path}\x1b[0m`);
+        } else {
+          console.log(`\x1b[33m  Skipped ${file.path}\x1b[0m`);
+        }
+      } catch (err: any) {
+        console.error(`\x1b[31m  Error resolving modified file ${file.path}: ${err.message}\x1b[0m`);
+      }
+    } else if (file.status === 'untracked') {
+      try {
+        const livePath = join(workspaceRoot, file.path);
+        const liveRaw = readFileSync(livePath, 'utf-8');
+        const liveScrubbed = scrubContentGeneric(liveRaw);
+        
+        console.log(`\x1b[1;33mScrubbed Content Preview:\x1b[0m`);
+        console.log(liveScrubbed);
+        
+        const answer = await rl.question(`\x1b[1;36mStart tracking untracked file ${file.path}? [y/N] ❯ \x1b[0m`);
+        if (answer.trim().toLowerCase() === 'y') {
+          await stageToTracking(workspaceRoot, file.path);
+          
+          const stat = statSync(livePath);
+          manifest.trackedPaths[file.path] = {
+            hash: computeScrubbedHash(liveRaw),
+            mode: stat.mode,
+            mtime: stat.mtimeMs
+          };
+          saveWorkspaceManifest(workspaceRoot, manifest);
+          console.log(`\x1b[32m  ✓ Staged and started tracking for ${file.path}\x1b[0m`);
+        } else {
+          console.log(`\x1b[33m  Skipped ${file.path}\x1b[0m`);
+        }
+      } catch (err: any) {
+        console.error(`\x1b[31m  Error resolving untracked file ${file.path}: ${err.message}\x1b[0m`);
+      }
+    } else if (file.status === 'missing') {
+      try {
+        const answer = await rl.question(`\x1b[1;36mStop tracking missing file ${file.path}? [y/N] ❯ \x1b[0m`);
+        if (answer.trim().toLowerCase() === 'y') {
+          delete manifest.trackedPaths[file.path];
+          saveWorkspaceManifest(workspaceRoot, manifest);
+          
+          const trackingRoot = getTrackingRoot();
+          const targetFile = join(trackingRoot, file.path);
+          if (existsSync(targetFile)) {
+            unlinkSync(targetFile);
+          }
+          try {
+            const { execSync } = await import('node:child_process');
+            execSync(`git rm "${file.path}"`, { cwd: trackingRoot, stdio: 'ignore' });
+            execSync(`git commit -m "Tracked configuration removal: ${file.path}"`, { cwd: trackingRoot, stdio: 'ignore' });
+          } catch {}
+          console.log(`\x1b[32m  ✓ Stopped tracking and deleted mirror for ${file.path}\x1b[0m`);
+        } else {
+          console.log(`\x1b[33m  Skipped ${file.path}\x1b[0m`);
+        }
+      } catch (err: any) {
+        console.error(`\x1b[31m  Error resolving missing file ${file.path}: ${err.message}\x1b[0m`);
+      }
+    }
+  }
+  console.log('\n\x1b[32m✓ Interactive resolution complete!\x1b[0m\n');
 }
 
 async function bootstrap() {
@@ -117,7 +218,7 @@ async function bootstrap() {
     process.exit(0);
   }
 
-  if (['manifest', 'status', 'inspect'].includes(positionals[0])) {
+  if (['manifest', 'status', 'inspect', 'resolve', 'stage'].includes(positionals[0])) {
     await handleWorkspaceCli(positionals, values);
   }
 
@@ -196,9 +297,34 @@ async function bootstrap() {
 
   // 9. Interactive REPL Loop
   // Draw Dashboard welcome banner
+  const root = findWorkspaceRoot(process.cwd());
+  let workspaceWarning = '';
+  if (!root) {
+    const anchors = ['package.json', 'Cargo.toml', 'pyproject.toml', 'go.mod', '.git'];
+    let hasAnchors = false;
+    let current = process.cwd();
+    while (true) {
+      if (anchors.some(anchor => existsSync(join(current, anchor)))) {
+        hasAnchors = true;
+        break;
+      }
+      const parent = dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+    if (hasAnchors) {
+      workspaceWarning = `│ \x1b[1;33mWorkspace: NOT INITIALIZED ⚠\x1b[0m                            \x1b[1;36m│\n` +
+                         `│ \x1b[2mRun "getit manifest init" to track workspace.\x1b[0m           \x1b[1;36m│\n` +
+                         `├────────────────────────────────────────────────────────┤\n`;
+    }
+  }
+
   console.log(`\n\x1b[1;36m┌────────────────────────────────────────────────────────┐`);
   console.log(`│ \x1b[1;32mGETIT WORKSPACE AGENT v${getVersion().padEnd(10)}\x1b[1;36m                         │`);
   console.log(`├────────────────────────────────────────────────────────┤`);
+  if (workspaceWarning) {
+    process.stdout.write(workspaceWarning);
+  }
   console.log(`│ \x1b[1;37mArchitecture:\x1b[0m  ${env.arch.padEnd(40)} \x1b[1;36m│`);
   console.log(`│ \x1b[1;37mPlatform:\x1b[0m      ${env.osName.padEnd(40)} \x1b[1;36m│`);
   
@@ -322,6 +448,20 @@ async function handleSlashCommand(input: string, agent: AgentLoop, systemPrompt:
       }
       return;
     }
+    case '/stage':
+    case '/resolve': {
+      try {
+        const workspaceRoot = findWorkspaceRoot(process.cwd());
+        if (!workspaceRoot) {
+          console.log('\x1b[31m  Error: No active workspace found. Please initialize workspace tracking using "getit manifest init" first.\x1b[0m\n');
+        } else {
+          await runWorkspaceResolve(workspaceRoot);
+        }
+      } catch (err: any) {
+        console.log(`\x1b[31m  Error: ${err.message}\x1b[0m`);
+      }
+      return;
+    }
     case '/sync': {
       console.log(`\n\x1b[1;36m  Initiating Secure Synchronization to Remote...\x1b[0m`);
       const res = await syncWithRemote();
@@ -415,6 +555,7 @@ Examples:
   $ getit manifest init          # Initialize active local workspace
   $ getit status                 # Check offline workspace configuration drift
   $ getit status --remote        # Check workspace sync status against GitHub remote
+  $ getit resolve                # Interactively resolve workspace configuration drift
   $ getit inspect .env           # Inspect credential-redacted tracking copy of config
   $ getit --model qwen/qwen3-coder:free
   `);
@@ -440,6 +581,7 @@ function printHelp(): void {
   console.log('│\x1b[0m  \x1b[1;37m/dry-run\x1b[0m     Show or toggle dry-run mode               \x1b[1;36m│');
   console.log('│\x1b[0m  \x1b[1;37m/policy\x1b[0m      Display active policy profile             \x1b[1;36m│');
   console.log('│\x1b[0m  \x1b[1;37m/status\x1b[0m      Display workspace drift status            \x1b[1;36m│');
+  console.log('│\x1b[0m  \x1b[1;37m/resolve\x1b[0m     Interactively resolve workspace drift    \x1b[1;36m│');
   console.log('│\x1b[0m  \x1b[1;37m/sync\x1b[0m        Synchronize tracking repo to remote       \x1b[1;36m│');
   console.log('│\x1b[0m                                                        \x1b[1;36m│');
   console.log('│\x1b[0m  \x1b[2mYou can also type "exit" or press Ctrl+C to quit.\x1b[0m      \x1b[1;36m│');
@@ -597,6 +739,22 @@ async function handleWorkspaceCli(positionals: string[], values: any) {
       console.log(`\n\x1b[1;36m--- Inspecting Scrubbed Tracking Mirror: ${file} ---\x1b[0m\n`);
       console.log(content);
       console.log(`\n\x1b[1;36m---------------------------------------------------\x1b[0m\n`);
+      process.exit(0);
+    } catch (err: any) {
+      console.error(`\x1b[31mError: ${err.message}\x1b[0m`);
+      process.exit(1);
+    }
+  }
+
+  if (cmd === 'resolve' || cmd === 'stage') {
+    try {
+      const workspaceRoot = findWorkspaceRoot(process.cwd());
+      if (!workspaceRoot) {
+        console.error(`\x1b[31mError: No active workspace found. Please initialize workspace tracking using "getit manifest init" first.\x1b[0m`);
+        process.exit(1);
+      }
+      await runWorkspaceResolve(workspaceRoot);
+      closeReadlineInterface();
       process.exit(0);
     } catch (err: any) {
       console.error(`\x1b[31mError: ${err.message}\x1b[0m`);
