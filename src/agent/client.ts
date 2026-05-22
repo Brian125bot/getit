@@ -25,11 +25,21 @@ export function initSessionModel(model: string): void {
   activeModel = model;
 }
 
+let chatRequestMock: ((messages: ChatMessage[], tools: any[]) => Promise<ChatCompletionResponse>) | null = null;
+
+export function setChatRequestMock(mock: typeof chatRequestMock): void {
+  chatRequestMock = mock;
+}
+
 export async function sendChatRequest(
   messages: ChatMessage[],
   tools: any[],
   onStreamToken?: (token: string) => void
 ): Promise<ChatCompletionResponse> {
+  if (chatRequestMock) {
+    return chatRequestMock(messages, tools);
+  }
+
   const config = loadConfig();
   const preset = resolveActivePreset(config.carrier, config.baseUrl);
 

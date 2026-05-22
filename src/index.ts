@@ -99,7 +99,7 @@ async function renderAdvisorCard(filePath: string, scrubbedContent: string, diff
   console.log('\n' + centerBlock(card) + '\n');
 }
 
-async function runWorkspaceResolve(workspaceRoot: string): Promise<void> {
+export async function runWorkspaceResolve(workspaceRoot: string): Promise<void> {
   const drift = await detectWorkspaceDrift(workspaceRoot);
   const filesToResolve = drift.files.filter(f => f.status !== 'unmodified');
   if (filesToResolve.length === 0) {
@@ -765,11 +765,7 @@ function printConfigCard(): void {
 
 async function runDoctorCli(): Promise<void> {
   console.log('\n\x1b[1;36m  Running getit doctor...\x1b[0m\n');
-  const checks = await runDoctorChecks();
-  for (const check of checks) {
-    const icon = check.ok ? '\x1b[32m✓\x1b[0m' : '\x1b[31m✗\x1b[0m';
-    console.log(`  ${icon} ${check.name.padEnd(22)} ${check.detail}`);
-  }
+  await runDoctorChecks();
   console.log('');
 }
 

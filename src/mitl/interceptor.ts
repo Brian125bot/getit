@@ -5,8 +5,14 @@ import { scrubText } from '../security/scrubber.js';
 import { getCenterPadding, centerPrompt, centerLine, centerBlock } from '../ui/layout.js';
 
 let rlInstance: readline.Interface | null = null;
+let mockRlInstance: readline.Interface | null = null;
+
+export function setReadlineInterface(rl: readline.Interface | null): void {
+  mockRlInstance = rl;
+}
 
 export function getReadlineInterface(): readline.Interface {
+  if (mockRlInstance) return mockRlInstance;
   if (!rlInstance) {
     rlInstance = readline.createInterface({ input, output });
   }
