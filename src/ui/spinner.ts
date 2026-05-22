@@ -1,4 +1,4 @@
-import { centerLine } from './layout.js';
+import { centerLine, stripAnsi } from './layout.js';
 
 const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const INTERVAL_MS = 80;
@@ -8,6 +8,7 @@ export class TerminalSpinner {
   private currentFrame = 0;
   private text = '';
   private isRunning = false;
+  private static activeInstance: TerminalSpinner | null = null;
 
   constructor(initialText: string = '') {
     this.text = initialText;
@@ -19,6 +20,7 @@ export class TerminalSpinner {
 
     this.isRunning = true;
     this.currentFrame = 0;
+    TerminalSpinner.activeInstance = this;
     
     // Hide cursor
     process.stdout.write('\x1B[?25l');
@@ -46,7 +48,7 @@ export class TerminalSpinner {
     this.stop(text, '\x1b[31m✖\x1b[0m'); // Red cross
   }
 
-  private stop(text?: string, symbol?: string): void {
+  public stop(text?: string, symbol?: string): void {
     if (!this.isRunning) return;
     
     if (text) this.text = text;
@@ -56,13 +58,15 @@ export class TerminalSpinner {
       this.timer = null;
     }
     this.isRunning = false;
+    TerminalSpinner.activeInstance = null;
 
     // Clear line
     process.stdout.write('\r\x1B[K');
     
     if (symbol) {
       const line = `${symbol} ${this.text}`;
-      process.stdout.write(`${centerLine(line, this.text.length + 2)}\n`);
+      const visibleLength = stripAnsi(line).length;
+      process.stdout.write(`${centerLine(line, visibleLength)}\n`);
     }
 
     // Show cursor
@@ -71,15 +75,35 @@ export class TerminalSpinner {
 
   private render(): void {
     const frame = FRAMES[this.currentFrame];
-    const line = `\x1b[36m${frame}\x1b[0m ${this.text}`;
+    // Use bold cyan (1;36m) as per spec for runtime states
+    const line = `\x1b[1;36m${frame}\x1b[0m ${this.text}`;
+    const visibleLength = stripAnsi(line).length;
     
     // Clear line and rewrite
     process.stdout.write('\r\x1B[K');
-    process.stdout.write(centerLine(line, this.text.length + 2));
+    process.stdout.write(centerLine(line, visibleLength));
+  }
+
+  public static restoreCursor(): void {
+    process.stdout.write('\x1B[?25h');
+    if (TerminalSpinner.activeInstance && TerminalSpinner.activeInstance.isRunning) {
+      TerminalSpinner.activeInstance.stop();
+    }
   }
 }
 
-// Always restore terminal cursor on process exit to avoid leaving terminal in a bad state
-process.on('exit', () => {
-  process.stdout.write('\x1B[?25h');
+// Global cleanup handlers for cursor restoration
+const exitHandler = () => {
+  TerminalSpinner.restoreCursor();
+};
+
+// Use once to avoid multiple triggers if possible, but SIGINT usually exits
+process.on('exit', exitHandler);
+process.on('SIGINT', () => { process.exit(0); });
+process.on('SIGTERM', () => { process.exit(0); });
+process.on('SIGHUP', () => { process.exit(0); });
+process.on('uncaughtException', (err) => {
+  TerminalSpinner.restoreCursor();
+  console.error('\n\x1b[1;31mFATAL ERROR:\x1b[0m', err);
+  process.exit(1);
 });

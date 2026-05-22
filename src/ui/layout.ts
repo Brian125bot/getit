@@ -45,12 +45,13 @@ export function centerBlock(text: string, termWidth: number = getTerminalWidth()
     return text;
   }
   const lines = text.split('\n');
-  const maxVisibleWidth = Math.max(...lines.map(line => stripAnsi(line).length));
-  const padding = ' '.repeat(getCenterPadding(maxVisibleWidth, termWidth));
+  const maxVisibleWidth = Math.max(0, ...lines.map(line => stripAnsi(line).length));
+  const paddingSize = getCenterPadding(maxVisibleWidth, termWidth);
+  const padding = ' '.repeat(paddingSize);
   return lines
     .map(line => {
-      // Don't pad empty space lines that are completely empty
-      if (line.trim() === '' && stripAnsi(line).length === 0) {
+      // Don't pad lines that are effectively empty (no visible chars)
+      if (stripAnsi(line).length === 0) {
         return line;
       }
       return padding + line;
@@ -66,6 +67,34 @@ export function centerPrompt(prompt: string, termWidth: number = getTerminalWidt
     return prompt;
   }
   const visibleLength = stripAnsi(prompt).length;
-  const padding = ' '.repeat(getCenterPadding(visibleLength, termWidth));
+  const paddingSize = getCenterPadding(visibleLength, termWidth);
+  const padding = ' '.repeat(paddingSize);
   return padding + prompt;
+}
+
+export interface BoxChars {
+  tl: string; tr: string; bl: string; br: string;
+  h: string; v: string; ml: string; mr: string; mh: string;
+}
+
+/**
+ * Provides adaptive box characters based on terminal width
+ */
+export function getBoxChars(termWidth: number = getTerminalWidth(), double: boolean = false): BoxChars {
+  if (termWidth < 60) {
+    return {
+      tl: '+', tr: '+', bl: '+', br: '+',
+      h: '-', v: '|', ml: '+', mr: '+', mh: '-'
+    };
+  }
+  if (double) {
+    return {
+      tl: '╔', tr: '╗', bl: '╚', br: '╝',
+      h: '═', v: '║', ml: '╟', mr: '╢', mh: '─'
+    };
+  }
+  return {
+    tl: '┌', tr: '┐', bl: '└', br: '┘',
+    h: '─', v: '│', ml: '├', mr: '┤', mh: '─'
+  };
 }

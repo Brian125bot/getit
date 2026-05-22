@@ -1,6 +1,6 @@
 import { execSync } from 'node:child_process';
 import { getTrackingRoot } from './tracking.js';
-import { stripAnsi, centerBlock } from '../ui/layout.js';
+import { stripAnsi, centerBlock, getBoxChars, getTerminalWidth } from '../ui/layout.js';
 
 export interface CommitRecord {
   hash: string;
@@ -38,13 +38,17 @@ export class WorkspaceHistoryManager {
   }
 
   /**
-   * Renders the history records into a beautiful double-line card centered horizontally.
+   * Renders the history records into a beautiful adaptive card centered horizontally.
    */
   static renderHistory(commits: CommitRecord[]): string {
-    const width = 58;
-    const top = `\x1b[1;36m╔${'═'.repeat(width - 2)}╗\x1b[0m`;
-    const mid = `\x1b[1;36m╟${'─'.repeat(width - 2)}╢\x1b[0m`;
-    const bot = `\x1b[1;36m╚${'═'.repeat(width - 2)}╝\x1b[0m`;
+    const termWidth = getTerminalWidth();
+    const box = getBoxChars(termWidth, true);
+    // Base width 58, but shrink if terminal is narrow
+    const width = Math.min(termWidth - 2, 58);
+
+    const top = `\x1b[1;36m${box.tl}${box.h.repeat(width - 2)}${box.tr}\x1b[0m`;
+    const mid = `\x1b[1;36m${box.ml}${box.mh.repeat(width - 2)}${box.mr}\x1b[0m`;
+    const bot = `\x1b[1;36m${box.bl}${box.h.repeat(width - 2)}${box.br}\x1b[0m`;
 
     const padCenter = (text: string, w: number): string => {
       const visible = stripAnsi(text).length;
@@ -54,12 +58,12 @@ export class WorkspaceHistoryManager {
       return left + text + right;
     };
 
-    const title = `\x1b[1;36m║\x1b[1;33m${padCenter('🕒 WORKSPACE SHADOW HISTORY', width - 2)}\x1b[1;36m║\x1b[0m`;
+    const title = `\x1b[1;36m${box.v}\x1b[1;33m${padCenter('🕒 WORKSPACE SHADOW HISTORY', width - 2)}\x1b[1;36m${box.v}\x1b[0m`;
 
     if (commits.length === 0) {
       const emptyMsg = `\x1b[1;30mNo shadow history found.\x1b[0m`;
       const padRight = Math.max(0, (width - 6) - stripAnsi(emptyMsg).length);
-      const line = `\x1b[1;36m║\x1b[0m  ${emptyMsg}${' '.repeat(padRight)}  \x1b[1;36m║\x1b[0m`;
+      const line = `\x1b[1;36m${box.v}\x1b[0m  ${emptyMsg}${' '.repeat(padRight)}  \x1b[1;36m${box.v}\x1b[0m`;
       return [top, title, mid, line, bot].join('\n');
     }
 
@@ -74,7 +78,7 @@ export class WorkspaceHistoryManager {
       const metaText = `\x1b[1;33m[${shortHash}]\x1b[0m \x1b[1;37m${commit.date}\x1b[0m • \x1b[32m${commit.author}\x1b[0m`;
       const metaVisible = stripAnsi(metaText).length;
       const metaPad = Math.max(0, maxLen - metaVisible);
-      lines.push(`\x1b[1;36m║\x1b[0m  ${metaText}${' '.repeat(metaPad)}  \x1b[1;36m║\x1b[0m`);
+      lines.push(`\x1b[1;36m${box.v}\x1b[0m  ${metaText}${' '.repeat(metaPad)}  \x1b[1;36m${box.v}\x1b[0m`);
 
       // Line 2: Message (wrapped if too long)
       let msg = commit.message;
@@ -90,16 +94,16 @@ export class WorkspaceHistoryManager {
 
         const visibleLength = stripAnsi(chunk).length;
         const msgPad = Math.max(0, maxLen - visibleLength);
-        lines.push(`\x1b[1;36m║\x1b[0m  \x1b[37m${chunk}\x1b[0m${' '.repeat(msgPad)}  \x1b[1;36m║\x1b[0m`);
+        lines.push(`\x1b[1;36m${box.v}\x1b[0m  \x1b[37m${chunk}\x1b[0m${' '.repeat(msgPad)}  \x1b[1;36m${box.v}\x1b[0m`);
       }
 
-      // Add a double spacer divider or empty space between commits
+      // Add a divider or empty space between commits
       if (i < commits.length - 1) {
-        lines.push(`\x1b[1;36m║\x1b[0m  ${' '.repeat(maxLen)}  \x1b[1;36m║\x1b[0m`);
+        lines.push(`\x1b[1;36m${box.v}\x1b[0m  ${' '.repeat(maxLen)}  \x1b[1;36m${box.v}\x1b[0m`);
       }
     }
 
     const card = [top, title, mid, ...lines, bot].join('\n');
-    return centerBlock(card);
+    return centerBlock(card, termWidth);
   }
 }
