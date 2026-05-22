@@ -1034,10 +1034,22 @@ const isMain = () => {
   try {
     const mainPath = realpathSync(process.argv[1]);
     const modulePath = realpathSync(fileURLToPath(import.meta.url));
-    return mainPath === modulePath;
+    if (mainPath === modulePath) return true;
+    
+    // Allow wrapper scripts (like dist/index.js or index.js in root) to count as the main entry point
+    const wrapperPaths = [
+      join(dirname(modulePath), '../index.js'),
+      join(dirname(modulePath), '../../index.js'),
+    ];
+    for (const wrapper of wrapperPaths) {
+      if (existsSync(wrapper) && realpathSync(wrapper) === mainPath) {
+        return true;
+      }
+    }
   } catch {
-    return false;
+    // Fallback if files or paths can't be resolved
   }
+  return false;
 };
 
 if (isMain()) {
