@@ -63,15 +63,5 @@ export async function runDoctorChecks(): Promise<DoctorCheck[]> {
     spinner.fail(`git Not found (workspace tracking limited)`);
   }
 
-  spinner.start('Checking gh CLI');
-  try {
-    execSync('gh --version', { stdio: 'pipe' });
-    checks.push({ name: 'gh CLI', ok: true, detail: 'Available' });
-    spinner.succeed(`gh CLI Available`);
-  } catch {
-    checks.push({ name: 'gh CLI', ok: false, detail: 'Not found (remote sync unavailable)' });
-    spinner.fail(`gh CLI Not found (remote sync unavailable)`);
-  }
-
   return checks;
 }

@@ -21,7 +21,6 @@ import { undoLatestTransaction } from './backup/shadow-store.js';
 import { initWorkspaceManifest, loadWorkspaceManifest, saveWorkspaceManifest, computeScrubbedHash } from './workspace/manifest.js';
 import { detectWorkspaceDrift } from './workspace/drift.js';
 import { inspectTrackedFile, stageToTracking, getTrackingRoot, scrubContentGeneric } from './workspace/tracking.js';
-import { checkRemoteStatus, syncWithRemote } from './workspace/remote.js';
 import { findWorkspaceRoot } from './workspace/boundary.js';
 import { resolveLiveFilePath } from './workspace/profiles.js';
 import { generateDiffPreview } from './tools/diff.js';
@@ -615,17 +614,6 @@ async function handleSlashCommand(input: string, agent: AgentLoop, systemPrompt:
       }
       return;
     }
-    case '/sync': {
-      console.log(`\n\x1b[1;36m  Initiating Secure Synchronization to Remote...\x1b[0m`);
-      const res = await syncWithRemote();
-      if (res.success) {
-        console.log(`\x1b[32m  ✓ Synchronized successfully!\x1b[0m`);
-        console.log(`  ${res.output.trim()}\n`);
-      } else {
-        console.log(`\x1b[31m  ✗ Sync failed: ${res.output}\x1b[0m\n`);
-      }
-      return;
-    }
     case '/export': {
       try {
         const wsRoot = findWorkspaceRoot(process.cwd());
@@ -734,11 +722,10 @@ Examples:
   $ getit --dry-run install rg   # Show and approve a roadmap before running
   $ getit undo                   # Restore the latest restorable transaction
   $ getit config                 # Show active carrier, model, and runtime options
-  $ getit doctor                 # Health check: carrier ping, git, gh
+  $ getit doctor                 # Health check: carrier connectivity, git
   $ getit models                 # List models for the active carrier
   $ getit manifest init          # Initialize active local workspace
   $ getit status                 # Check offline workspace configuration drift
-  $ getit status --remote        # Check workspace sync status against GitHub remote
   $ getit resolve                # Interactively resolve workspace configuration drift
   $ getit inspect .env           # Inspect credential-redacted tracking copy of config
   $ getit export [dir]         # Export scrubbed mirror of all tracked files
@@ -820,7 +807,6 @@ function printHelp(): void {
     '│\x1b[0m  \x1b[1;37m/config\x1b[0m      Display current runtime options           \x1b[1;36m│',
     '│\x1b[0m  \x1b[1;37m/status\x1b[0m      Display workspace drift status            \x1b[1;36m│',
     '│\x1b[0m  \x1b[1;37m/resolve\x1b[0m     Interactively resolve workspace drift    \x1b[1;36m│',
-    '│\x1b[0m  \x1b[1;37m/sync\x1b[0m        Synchronize tracking repo to remote       \x1b[1;36m│',
     '│\x1b[0m  \x1b[1;37m/export\x1b[0m      Export scrubbed copy of tracked files  \x1b[1;36m│',
     '│\x1b[0m                                                        \x1b[1;36m│',
     '│\x1b[0m  \x1b[2mYou can also type "exit" or press Ctrl+C to quit.\x1b[0m      \x1b[1;36m│',
@@ -922,7 +908,6 @@ async function handleWorkspaceCli(positionals: string[], values: any) {
   }
 
   if (cmd === 'status') {
-    const isRemote = positionals.includes('--remote') || process.argv.includes('--remote');
     try {
       const wsRoot = findWorkspaceRoot(process.cwd());
       if (!wsRoot) {
@@ -948,25 +933,6 @@ async function handleWorkspaceCli(positionals: string[], values: any) {
           console.log(`  ${statusColor}${file.status.padEnd(10)}\x1b[0m ${file.path}`);
         }
         console.log('');
-      }
-
-      if (isRemote) {
-        console.log(`\x1b[1;36m  Evaluating Secure Remote Sync Status...\x1b[0m`);
-        const remote = checkRemoteStatus();
-        if (!remote.hasRemote) {
-          console.log(`  Remote:    \x1b[33mNot Configured\x1b[0m\n`);
-        } else {
-          console.log(`  Remote:    \x1b[1;37m${remote.remoteUrl}\x1b[0m`);
-          if (remote.error) {
-            console.log(`  Status:    \x1b[31m${remote.error}\x1b[0m\n`);
-          } else {
-            console.log(`  Synced:    \x1b[1;37m${remote.isSynced ? 'Yes ✓' : 'No ✗'}\x1b[0m`);
-            if (!remote.isSynced) {
-              console.log(`  Drift:     \x1b[33m${remote.ahead || 0} ahead, ${remote.behind || 0} behind\x1b[0m`);
-            }
-            console.log('');
-          }
-        }
       }
 
       process.exit(0);

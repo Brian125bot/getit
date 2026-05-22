@@ -20,7 +20,7 @@
 
 ## Overview
 
-`getit` is a lightweight, stateful, terminal-native workspace assistant built entirely in TypeScript with **zero production dependencies**. It bridges natural language intent and real system operations — installing software, editing configuration files, managing dotfiles, and synchronizing workspace state — while keeping a human in complete control of every mutation.
+`getit` is a lightweight, stateful, terminal-native workspace assistant built entirely in TypeScript with **zero production dependencies**. It bridges natural language intent and real system operations — installing software, editing configuration files, and managing dotfiles — while keeping a human in complete control of every mutation.
 
 Every command proposed by the LLM is intercepted, displayed, safety-checked, and held behind a manual `[Y/n/e]` approval gate before anything touches your system. No action ever executes automatically.
 
@@ -38,7 +38,6 @@ Every command proposed by the LLM is intercepted, displayed, safety-checked, and
 | 🗺️ **Dry-Run Planner** | Preview the full multi-step action plan before a single command executes |
 | 📊 **Workspace Drift Detection** | SHA-256 tracking of dotfiles detects live vs. manifest divergence |
 | 🩹 **Deterministic Healer** | Rule-based dependency error detection proposes targeted fixes without involving the LLM |
-| 🔄 **Remote Sync** | Secret-free push of scrubbed workspace state to GitHub via the `gh` CLI |
 | ⚙️ **Setup Wizard** | Interactive `--setup` wizard writes `.getitrc` with carrier, model, and timeout |
 
 ---
@@ -128,7 +127,7 @@ Every proposed action passes through three sequential safety layers before reach
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                   Workspace Subsystem  (workspace/)                     │
-│  manifest • drift detection • healer • shadow tracking • remote sync    │
+│  manifest • drift detection • healer • shadow tracking                  │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -263,7 +262,6 @@ getit --model gpt-4o     # Override the model for one session
 ```bash
 getit manifest init      # Initialize workspace manifest and profile dirs
 getit status             # Offline drift report (live vs. manifest)
-getit status --remote    # Drift report + GitHub sync status via gh
 getit inspect .bashrc    # View the scrubbed tracking mirror of a file
 getit export [dir]       # Bulk export all scrubbed tracked files
 getit resolve            # Interactively resolve drift with AI advisory
@@ -284,7 +282,6 @@ Inside the interactive REPL, the following slash commands are handled locally wi
 | `/setup` | Re-run the setup wizard |
 | `/status` | Show workspace drift summary |
 | `/resolve` | Start interactive drift resolution |
-| `/sync` | Push scrubbed workspace state to remote |
 | `/export` | Export all scrubbed tracked files |
 | `/history` | View shadow commit log |
 | `/rollback <hash>` | Roll back to a shadow commit |
@@ -435,7 +432,7 @@ getit/
 │   ├── setup/              # Interactive setup wizard, .getitrc writer
 │   ├── tools/              # Tool registry, execute-bash, manage-file, diff engine
 │   ├── ui/                 # Centered ANSI layout, progress indicators
-│   ├── workspace/          # Manifest, drift detection, healer, tracking, remote sync
+│   ├── workspace/          # Manifest, drift detection, healer, tracking
 │   └── backup/             # Ledger, snapshot store, undo engine
 ├── tests/                  # 112-test native Node.js test suite
 ├── dist/                   # Compiled JavaScript output
