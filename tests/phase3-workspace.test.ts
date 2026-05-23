@@ -15,7 +15,7 @@ test('Phase 3 Workspace: Manifest Initialization & Load', async () => {
     fs.writeFileSync(path.join(tempDir, 'package.json'), JSON.stringify({ name: 'test-project' }), 'utf-8');
     
     // Init manifest
-    const manifest = await await initWorkspaceManifest(tempDir);
+    const manifest = await initWorkspaceManifest(tempDir);
     
     assert.ok(manifest.fingerprint);
     assert.strictEqual(manifest.platform, os.platform());
@@ -39,13 +39,13 @@ test('Phase 3 Workspace: Root climbing search', async () => {
   
   try {
     // No manifest initially
-    assert.strictEqual(findWorkspaceRoot(subSubDir), null);
+    assert.strictEqual(await findWorkspaceRoot(subSubDir), null);
 
     // Create manifest at tempDir root
     fs.writeFileSync(path.join(tempDir, MANIFEST_FILENAME), '{}', 'utf-8');
     
     // Should now find it by climbing up
-    assert.strictEqual(findWorkspaceRoot(subSubDir), tempDir);
+    assert.strictEqual(await findWorkspaceRoot(subSubDir), path.resolve(tempDir));
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

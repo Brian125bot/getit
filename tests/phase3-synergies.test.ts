@@ -17,11 +17,11 @@ test('Synergy A: Failed commands without healer match append diagnostic advice',
   assert.ok(result.error.includes('[Healer Note: This error did not match any automated healing rules. Please review the stderr logs to identify if a system dependency or config is missing and run a corrective command.]'));
 });
 
-test('Synergy C: Environmental dashboard warning logic resolves anchors correctly', () => {
+test('Synergy C: Environmental dashboard warning logic resolves anchors correctly', async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'getit-sync-warning-'));
   try {
     // 1. Initially, no manifest and no anchors
-    let root = findWorkspaceRoot(tempDir);
+    let root = await findWorkspaceRoot(tempDir);
     assert.strictEqual(root, null);
     
     const anchors = ['package.json', 'Cargo.toml', 'pyproject.toml', 'go.mod', '.git'];
@@ -32,7 +32,7 @@ test('Synergy C: Environmental dashboard warning logic resolves anchors correctl
     fs.writeFileSync(path.join(tempDir, 'package.json'), '{}', 'utf-8');
     
     // Still no manifest root
-    root = findWorkspaceRoot(tempDir);
+    root = await findWorkspaceRoot(tempDir);
     assert.strictEqual(root, null);
     
     // But anchors exist!

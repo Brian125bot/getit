@@ -11,7 +11,7 @@ export interface HealingRule {
 const HEALING_RULES: HealingRule[] = [
   {
     name: 'Command not found',
-    pattern: /(?:bash: |sh: |command not found: )(\S+)|(\S+): command not found/i,
+    pattern: /(?:bash: |sh: |command not found: )([^:\s]+)|([^:\s]+): command not found/i,
     getFixCommand: (match, pkgMgr, platform) => {
       const command = match[1] || match[2];
       if (pkgMgr === 'apt-get') return `sudo apt-get update && sudo apt-get install -y ${command}`;
