@@ -6,6 +6,7 @@ import { scrubText } from '../security/scrubber.js';
 import { loadConfig } from '../security/secrets-loader.js';
 import { resolveActivePreset } from '../carriers/registry.js';
 import { TerminalSpinner } from '../ui/spinner.js';
+import { SecurityPolicyViolationError } from '../security/path-policy.js';
 
 export class AgentLoop {
   private messages: ChatMessage[] = [];
@@ -128,24 +129,39 @@ export class AgentLoop {
 
             console.log(`\n\x1b[35m[getit] Dispatching Tool Call: ${name}\x1b[0m`);
             
-            const dispatchResult = await dispatchToolCall(name, args);
+            try {
+              const dispatchResult = await dispatchToolCall(name, args);
 
-            // Append the tool execution result back to the history
-            this.messages.push({
-              role: 'tool',
-              name: name,
-              tool_call_id: toolCall.id,
-              content: dispatchResult.content
-            });
-
-            if (dispatchResult.clarifyRequest) {
+              // Append the tool execution result back to the history
               this.messages.push({
-                role: 'user',
-                content: dispatchResult.clarifyRequest
+                role: 'tool',
+                name: name,
+                tool_call_id: toolCall.id,
+                content: dispatchResult.content
               });
-            } else if (dispatchResult.haltTurn) {
-              haltLoop = true;
-              console.log(`\x1b[1;31m[getit] Fail-Closed: Execution generated a halt signal. Halting automatic agent iterations.\x1b[0m`);
+
+              if (dispatchResult.clarifyRequest) {
+                this.messages.push({
+                  role: 'user',
+                  content: dispatchResult.clarifyRequest
+                });
+              } else if (dispatchResult.haltTurn) {
+                haltLoop = true;
+                console.log(`\x1b[1;31m[getit] Fail-Closed: Execution generated a halt signal. Halting automatic agent iterations.\x1b[0m`);
+              }
+            } catch (dispatchErr: any) {
+              if (dispatchErr instanceof SecurityPolicyViolationError) {
+                console.error(`\n\x1b[1;31m[SECURITY VIOLATION] ${dispatchErr.message}\x1b[0m`);
+                this.messages.push({
+                  role: 'tool',
+                  name: name,
+                  tool_call_id: toolCall.id,
+                  content: JSON.stringify({ error: dispatchErr.message, securityViolation: true })
+                });
+                haltLoop = true;
+              } else {
+                throw dispatchErr;
+              }
             }
           }
 

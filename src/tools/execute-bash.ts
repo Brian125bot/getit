@@ -6,7 +6,7 @@ import * as fsp from 'node:fs/promises';
 import { getSafeEnv } from '../security/env-scrubber.js';
 import { sanitizeBashCommand } from '../security/input-sanitizer.js';
 import { interceptToolCall } from '../mitl/interceptor.js';
-import { assertPathAllowed, resolveRealPath } from '../security/path-policy.js';
+import { assertPathAllowed, resolveRealPath, SecurityPolicyViolationError } from '../security/path-policy.js';
 import { executeCommandAsync } from '../execution/async-process.js';
 import { recordCommand } from '../backup/shadow-store.js';
 import { attemptDependencyHealing } from '../workspace/healer.js';
@@ -65,6 +65,9 @@ export async function executeBash(command: string, workingDirectory?: string): P
     try {
       await setActiveCwd(workingDirectory);
     } catch (e: any) {
+      if (e instanceof SecurityPolicyViolationError) {
+        throw e;
+      }
       return {
         stdout: '',
         stderr: e.message,

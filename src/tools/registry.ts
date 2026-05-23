@@ -3,7 +3,7 @@ import { manageFile } from './manage-file.js';
 import { getRuntimeSession } from '../runtime/session.js';
 import { isMutatingToolCall, PlannedToolCall, PlannedToolName } from '../planning/plan-queue.js';
 import * as fsp from 'node:fs/promises';
-import { assertPathAllowed } from '../security/path-policy.js';
+import { assertPathAllowed, SecurityPolicyViolationError } from '../security/path-policy.js';
 import { scrubText } from '../security/scrubber.js';
 
 export interface ToolDispatchResult {
@@ -68,6 +68,9 @@ export async function dispatchToolCall(name: string, args: any): Promise<ToolDis
       haltTurn: false
     };
   } catch (error: any) {
+    if (error instanceof SecurityPolicyViolationError) {
+      throw error;
+    }
     return {
       content: JSON.stringify({ error: error.message }),
       haltTurn: true

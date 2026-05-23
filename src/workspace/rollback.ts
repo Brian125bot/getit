@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 const execFile = promisify(execFileCb);
 import { getTrackingRoot, scrubContentGeneric, stageToTracking } from './tracking.js';
 import { findWorkspaceRoot } from './boundary.js';
-import { assertPathAllowed, resolveRealPath } from '../security/path-policy.js';
+import { assertPathAllowed, resolveRealPath, SecurityPolicyViolationError } from '../security/path-policy.js';
 import { loadWorkspaceManifest, saveWorkspaceManifest, computeScrubbedHash } from './manifest.js';
 import { generateDiffPreview } from '../tools/diff.js';
 import { getReadlineInterface } from '../mitl/interceptor.js';

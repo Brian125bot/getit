@@ -7,6 +7,13 @@ import { findWorkspaceRoot, isPathInWorkspace } from '../workspace/boundary.js';
 
 const HOME = os.homedir();
 
+export class SecurityPolicyViolationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SecurityPolicyViolationError';
+  }
+}
+
 const CATASTROPHIC_BLOCKS = [
   '/dev',
   '/proc',
@@ -104,7 +111,7 @@ export async function validatePath(targetPath: string, options: { cwd?: string; 
 export async function assertPathAllowed(targetPath: string, options: { cwd?: string; profile?: PolicyProfile } = {}): Promise<string> {
   const result = await validatePath(targetPath, options);
   if (!result.allowed) {
-    throw new Error(`Security Exception: ${result.reason || `Access to path "${targetPath}" is blocked.`}`);
+    throw new SecurityPolicyViolationError(`Security Exception: ${result.reason || `Access to path "${targetPath}" is blocked.`}`);
   }
   return result.resolvedPath;
 }

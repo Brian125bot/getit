@@ -1,6 +1,6 @@
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
-import { assertPathAllowed, resolveRealPath } from '../security/path-policy.js';
+import { assertPathAllowed, resolveRealPath, SecurityPolicyViolationError } from '../security/path-policy.js';
 import { interceptToolCall } from '../mitl/interceptor.js';
 import { generateDiffPreview } from './diff.js';
 import { snapshotBeforeWrite } from '../backup/shadow-store.js';
@@ -157,6 +157,9 @@ export async function manageFile(
 
     return { success: false, error: `Unknown action: ${action}` };
   } catch (error: any) {
+    if (error instanceof SecurityPolicyViolationError) {
+      throw error;
+    }
     return { success: false, error: error.message };
   }
 }
