@@ -15,6 +15,7 @@ export interface FileOperationResult {
     lines: number;
   };
   error?: string;
+  clarifyRequest?: string;
 }
 
 export async function manageFile(
@@ -25,10 +26,10 @@ export async function manageFile(
   replace?: string
 ): Promise<FileOperationResult> {
   try {
-    const resolvedPath = resolveRealPath(filePath);
+    const resolvedPath = await resolveRealPath(filePath);
     
     // 1. Safety check
-    assertPathAllowed(resolvedPath);
+    await assertPathAllowed(resolvedPath);
 
     if (action === 'read') {
       if (!(await pathExists(resolvedPath))) {
@@ -57,7 +58,7 @@ export async function manageFile(
 
       // Ensure containing directory path is safe
       const dirName = path.dirname(resolvedPath);
-      assertPathAllowed(dirName);
+      await assertPathAllowed(dirName);
 
       // Stage 1: MITL Gate
       const warnings: string[] = [];
@@ -68,7 +69,7 @@ export async function manageFile(
       }
       const mitlResult = await interceptToolCall('FILE CREATE', content, warnings);
       if (!mitlResult.approved) {
-        return { success: false, error: 'File creation denied by user.' };
+        return { success: false, error: mitlResult.reason || 'File creation denied by user.', clarifyRequest: mitlResult.clarifyRequest };
       }
 
       // Ensure containing directory exists (defer until approved)
@@ -77,7 +78,7 @@ export async function manageFile(
       }
 
       const finalContent = mitlResult.payload;
-      snapshotBeforeWrite(resolvedPath, 'file_create');
+      await snapshotBeforeWrite(resolvedPath, 'file_create');
       await atomicWriteFile(resolvedPath, finalContent);
 
       return {
@@ -134,7 +135,7 @@ export async function manageFile(
       }
       const mitlResult = await interceptToolCall('FILE PATCH', diffPreview, warnings, modifiedContent);
       if (!mitlResult.approved) {
-        return { success: false, error: 'File patching denied by user.' };
+        return { success: false, error: mitlResult.reason || 'File patching denied by user.', clarifyRequest: mitlResult.clarifyRequest };
       }
 
       let finalContent = modifiedContent;
@@ -142,7 +143,7 @@ export async function manageFile(
         finalContent = mitlResult.payload;
       }
 
-      snapshotBeforeWrite(resolvedPath, 'file_patch');
+      await snapshotBeforeWrite(resolvedPath, 'file_patch');
       await atomicWriteFile(resolvedPath, finalContent);
 
       return {

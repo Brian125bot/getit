@@ -13,8 +13,8 @@ export class WorkspaceHistoryManager {
   /**
    * Retrieves Git commit logs from the shadow tracking repository.
    */
-  static getHistory(): CommitRecord[] {
-    const trackingRoot = getTrackingRoot();
+  static async getHistory(): Promise<CommitRecord[]> {
+    const trackingRoot = await getTrackingRoot();
     try {
       const output = execSync('git log --pretty=format:"%H||__DELIM__||%an||__DELIM__||%ad||__DELIM__||%s" --date=short', {
         cwd: trackingRoot,

@@ -1,4 +1,4 @@
-import * as fs from 'node:fs';
+import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 
 export const COMMON_DIR = 'common';
@@ -9,16 +9,16 @@ const MAX_PROFILE_DEPTH = 3;
 /**
  * Ensures shared common/ and machine-specific profiles/<fingerprint>/ directories exist.
  */
-export function ensureProfileLayout(workspaceRoot: string, fingerprint: string): void {
+export async function ensureProfileLayout(workspaceRoot: string, fingerprint: string): Promise<void> {
   const commonPath = path.join(workspaceRoot, COMMON_DIR);
   const profilePath = getProfileDir(workspaceRoot, fingerprint);
 
-  fs.mkdirSync(commonPath, { recursive: true });
-  fs.mkdirSync(profilePath, { recursive: true });
+  await fsp.mkdir(commonPath, { recursive: true });
+  await fsp.mkdir(profilePath, { recursive: true });
 
   const readme = path.join(commonPath, 'README.md');
-  if (!fs.existsSync(readme)) {
-    fs.writeFileSync(
+  try { await fsp.access(readme); } catch {
+    await fsp.writeFile(
       readme,
       '# getit common profile\n\nPlace shared configuration files here. They apply to all machines.\n',
       'utf-8'
@@ -26,8 +26,8 @@ export function ensureProfileLayout(workspaceRoot: string, fingerprint: string):
   }
 
   const profileReadme = path.join(profilePath, 'README.md');
-  if (!fs.existsSync(profileReadme)) {
-    fs.writeFileSync(
+  try { await fsp.access(profileReadme); } catch {
+    await fsp.writeFile(
       profileReadme,
       `# getit machine profile (${fingerprint.slice(0, 8)}…)\n\nMachine-specific overrides for this host fingerprint.\n`,
       'utf-8'
@@ -42,7 +42,7 @@ export function getProfileDir(workspaceRoot: string, fingerprint: string): strin
 /**
  * Collects relative paths under common/ and profiles/<fingerprint>/ (metadata-only candidates).
  */
-export function collectProfileCandidatePaths(workspaceRoot: string, fingerprint: string): string[] {
+export async function collectProfileCandidatePaths(workspaceRoot: string, fingerprint: string): Promise<string[]> {
   const results: string[] = [];
   const bases = [
     { abs: path.join(workspaceRoot, COMMON_DIR), rel: COMMON_DIR },
@@ -50,19 +50,19 @@ export function collectProfileCandidatePaths(workspaceRoot: string, fingerprint:
   ];
 
   for (const { abs, rel } of bases) {
-    if (!fs.existsSync(abs)) continue;
-    walkProfileTree(abs, rel, 0, results);
+    try { await fsp.access(abs); } catch { continue; }
+    await walkProfileTree(abs, rel, 0, results);
   }
 
   return results.sort();
 }
 
-function walkProfileTree(absDir: string, relPrefix: string, depth: number, results: string[]): void {
+async function walkProfileTree(absDir: string, relPrefix: string, depth: number, results: string[]): Promise<void> {
   if (depth > MAX_PROFILE_DEPTH) return;
 
-  let entries: fs.Dirent[];
+  let entries;
   try {
-    entries = fs.readdirSync(absDir, { withFileTypes: true });
+    entries = await fsp.readdir(absDir, { withFileTypes: true });
   } catch {
     return;
   }
@@ -72,7 +72,7 @@ function walkProfileTree(absDir: string, relPrefix: string, depth: number, resul
     const absPath = path.join(absDir, entry.name);
 
     if (entry.isDirectory()) {
-      walkProfileTree(absPath, relPath, depth + 1, results);
+      await walkProfileTree(absPath, relPath, depth + 1, results);
     } else if (entry.isFile() && entry.name !== 'README.md') {
       results.push(relPath);
     }

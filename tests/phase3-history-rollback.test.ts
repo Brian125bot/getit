@@ -10,7 +10,7 @@ import { WorkspaceHistoryManager } from '../src/workspace/history.js';
 import { WorkspaceRollbackManager } from '../src/workspace/rollback.js';
 import { findWorkspaceRoot } from '../src/workspace/boundary.js';
 
-test('Phase 3: Workspace Shadow History Explorer Parsing & Rendering', () => {
+test('Phase 3: Workspace Shadow History Explorer Parsing & Rendering', async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'getit-history-test-'));
   const trackingBase = path.join(tempDir, 'tracking-base');
   fs.mkdirSync(trackingBase, { recursive: true });
@@ -22,11 +22,11 @@ test('Phase 3: Workspace Shadow History Explorer Parsing & Rendering', () => {
   process.env.GETIT_TEST_MODE = 'true';
 
   try {
-    const trackingRoot = getTrackingRoot();
+    const trackingRoot = await getTrackingRoot();
     assert.ok(fs.existsSync(trackingRoot));
 
     // Initially, there should be no commits/history
-    const initialHistory = WorkspaceHistoryManager.getHistory();
+    const initialHistory = await WorkspaceHistoryManager.getHistory();
     assert.strictEqual(initialHistory.length, 0);
 
     // Create a mock tracking file and commit it
@@ -36,7 +36,7 @@ test('Phase 3: Workspace Shadow History Explorer Parsing & Rendering', () => {
     execSync('git add config.json', { cwd: trackingRoot, stdio: 'ignore' });
     execSync('git commit -m "Initial commit test"', { cwd: trackingRoot, stdio: 'ignore' });
 
-    const history = WorkspaceHistoryManager.getHistory();
+    const history = await WorkspaceHistoryManager.getHistory();
     assert.strictEqual(history.length, 1);
     assert.strictEqual(history[0].message, 'Initial commit test');
     assert.ok(history[0].hash.length > 0);
@@ -71,14 +71,14 @@ test('Phase 3: Stateful Rollback & Manifest Signature Syncing', async () => {
     fs.writeFileSync(liveFile, '[tool.poetry]\nname = "v1"\n', 'utf-8');
 
     // Init manifest
-    await initWorkspaceManifest(tempWorkspace);
-    const manifest1 = loadWorkspaceManifest(tempWorkspace);
+    await await initWorkspaceManifest(tempWorkspace);
+    const manifest1 = await loadWorkspaceManifest(tempWorkspace);
     assert.ok(manifest1.trackedPaths['pyproject.toml']);
 
     // Stage v1 to tracking
     await stageToTracking(tempWorkspace, 'pyproject.toml');
 
-    const history1 = WorkspaceHistoryManager.getHistory();
+    const history1 = await WorkspaceHistoryManager.getHistory();
     assert.strictEqual(history1.length, 1);
     const commitHashV1 = history1[0].hash;
 
@@ -87,7 +87,7 @@ test('Phase 3: Stateful Rollback & Manifest Signature Syncing', async () => {
     // Stage v2 to tracking
     await stageToTracking(tempWorkspace, 'pyproject.toml');
 
-    const history2 = WorkspaceHistoryManager.getHistory();
+    const history2 = await WorkspaceHistoryManager.getHistory();
     assert.strictEqual(history2.length, 2);
 
     // Modify live workspace file to create "drift"
@@ -107,7 +107,7 @@ test('Phase 3: Stateful Rollback & Manifest Signature Syncing', async () => {
     assert.strictEqual(rolledBackContent, '[tool.poetry]\nname = "v1"\n');
 
     // Assert that manifest has been updated
-    const updatedManifest = loadWorkspaceManifest(tempWorkspace);
+    const updatedManifest = await loadWorkspaceManifest(tempWorkspace);
     assert.strictEqual(updatedManifest.trackedPaths['pyproject.toml'].hash, manifest1.trackedPaths['pyproject.toml'].hash);
   } finally {
     process.env.GETIT_BACKUP_ROOT = originalBackupRoot;
@@ -132,14 +132,14 @@ test('Phase 3: Rollback Security Boundary Check', async () => {
 
   try {
     // Init manifest
-    await initWorkspaceManifest(tempWorkspace);
+    await await initWorkspaceManifest(tempWorkspace);
 
     // Write a mock commit
     const liveFile = path.join(tempWorkspace, 'Cargo.toml');
     fs.writeFileSync(liveFile, 'dependencies = {}', 'utf-8');
     await stageToTracking(tempWorkspace, 'Cargo.toml');
 
-    const history = WorkspaceHistoryManager.getHistory();
+    const history = await WorkspaceHistoryManager.getHistory();
     const commitHash = history[0].hash;
 
     // Target a path outside the workspace

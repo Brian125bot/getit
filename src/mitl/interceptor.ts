@@ -30,6 +30,7 @@ export interface InterceptionResult {
   approved: boolean;
   payload: string;
   reason?: string;
+  clarifyRequest?: string;
 }
 
 /**
@@ -143,7 +144,7 @@ export async function interceptToolCall(
     // PROMPT USER
     while (true) {
       // Use Cyan (\x1b[1;36m) for primary prompts
-      const questionPrompt = centerPrompt('\x1b[1;36mApprove command? [Y/n/e] ❯ \x1b[0m');
+      const questionPrompt = centerPrompt('\x1b[1;36mApprove command? [Y/n/e/c] ❯ \x1b[0m');
       const answer = await rl.question(questionPrompt);
       const choice = answer.trim().toLowerCase();
 
@@ -159,10 +160,20 @@ export async function interceptToolCall(
           console.log('');
         }
         const editPrompt = centerPrompt('\x1b[1;36mEnter modified payload ❯ \x1b[0m');
-        const editedPayload = await rl.question(editPrompt);
+        const targetPayload = editPayload !== undefined ? editPayload : payload;
+        
+        const questionPromise = rl.question(editPrompt);
+        rl.write(targetPayload);
+        const editedPayload = await questionPromise;
+        
         return { approved: true, payload: editedPayload };
+      } else if (choice === 'c') {
+        console.log('\n' + centerLine('\x1b[1;33m--- CLARIFY MODE ---\x1b[0m', 20));
+        const clarifyPrompt = centerPrompt('\x1b[1;36mQuestion for Agent ❯ \x1b[0m');
+        const question = await rl.question(clarifyPrompt);
+        return { approved: false, payload, clarifyRequest: `User paused execution to ask: ${question}` };
       } else {
-        console.log(centerLine('\x1b[1;31mInvalid input. Please enter "y", "n", or "e".\x1b[0m', 42));
+        console.log(centerLine('\x1b[1;31mInvalid input. Please enter "y", "n", "e", or "c".\x1b[0m', 47));
       }
     }
   } finally {

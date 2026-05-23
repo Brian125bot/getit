@@ -1,29 +1,31 @@
-import * as fs from 'node:fs';
+import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { execSync, execFileSync } from 'node:child_process';
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
+const execFile = promisify(execFileCb);
 import { scrubText, MaskingSession } from '../security/scrubber.js';
 import { resolveLiveFilePath } from './profiles.js';
 
 /**
  * Resolves the tracking repository root directory and ensures it is initialized as a Git repository.
  */
-export function getTrackingRoot(): string {
+export async function getTrackingRoot(): Promise<string> {
   const home = os.homedir();
   const base = process.env.GETIT_BACKUP_ROOT || path.join(home, '.local/state/getit');
   const trackingDir = path.join(base, 'tracking');
-  if (!fs.existsSync(trackingDir)) {
-    fs.mkdirSync(trackingDir, { recursive: true });
-  }
+  await fsp.mkdir(trackingDir, { recursive: true });
   
   // Initialize git repo if not present
   const gitDir = path.join(trackingDir, '.git');
-  if (!fs.existsSync(gitDir)) {
+  try {
+    await fsp.access(gitDir);
+  } catch {
     try {
-      execFileSync('git', ['init'], { cwd: trackingDir, stdio: 'ignore' });
+      await execFile('git', ['init'], { cwd: trackingDir });
       // Configure simple git details to prevent errors on commit
-      execFileSync('git', ['config', 'user.name', 'getit'], { cwd: trackingDir, stdio: 'ignore' });
-      execFileSync('git', ['config', 'user.email', 'agent@getit.local'], { cwd: trackingDir, stdio: 'ignore' });
+      await execFile('git', ['config', 'user.name', 'getit'], { cwd: trackingDir });
+      await execFile('git', ['config', 'user.email', 'agent@getit.local'], { cwd: trackingDir });
     } catch {
       // If git init fails (e.g. git is not installed), fail gracefully or skip git tracking features
     }
@@ -46,33 +48,34 @@ export function scrubContentGeneric(content: string): string {
  */
 export async function stageToTracking(workspaceRoot: string, relativePath: string): Promise<void> {
   const liveFile = resolveLiveFilePath(workspaceRoot, relativePath);
-  if (!fs.existsSync(liveFile)) {
+  try {
+    await fsp.access(liveFile);
+  } catch {
     throw new Error(`File does not exist: ${liveFile}`);
   }
 
-  const content = fs.readFileSync(liveFile, 'utf-8');
+  const content = await fsp.readFile(liveFile, 'utf-8');
   const scrubbed = scrubContentGeneric(content);
 
-  const trackingRoot = getTrackingRoot();
+  const trackingRoot = await getTrackingRoot();
   const targetFile = path.join(trackingRoot, relativePath);
 
   // Ensure target directory exists in tracking repo
-  fs.mkdirSync(path.dirname(targetFile), { recursive: true });
-  fs.writeFileSync(targetFile, scrubbed, 'utf-8');
+  await fsp.mkdir(path.dirname(targetFile), { recursive: true });
+  await fsp.writeFile(targetFile, scrubbed, 'utf-8');
 
   // Sync permissions
-  const stat = fs.statSync(liveFile);
-  fs.chmodSync(targetFile, stat.mode);
+  const stat = await fsp.stat(liveFile);
+  await fsp.chmod(targetFile, stat.mode);
 
   // Commit changes to tracking git if available
   try {
-    execFileSync('git', ['add', relativePath], { cwd: trackingRoot, stdio: 'ignore' });
+    await execFile('git', ['add', relativePath], { cwd: trackingRoot });
     // Check if there are changes before committing to avoid zero-exit status failures or warnings
-    const status = execFileSync('git', ['status', '--porcelain', relativePath], { cwd: trackingRoot, encoding: 'utf-8' });
+    const { stdout: status } = await execFile('git', ['status', '--porcelain', relativePath], { cwd: trackingRoot, encoding: 'utf-8' });
     if (status.trim().length > 0) {
-      execFileSync('git', ['commit', '-m', `Tracked configuration update: ${relativePath}`], {
+      await execFile('git', ['commit', '-m', `Tracked configuration update: ${relativePath}`], {
         cwd: trackingRoot,
-        stdio: 'ignore',
         env: {
           ...process.env,
           GIT_AUTHOR_NAME: 'getit-agent',
@@ -91,10 +94,12 @@ export async function stageToTracking(workspaceRoot: string, relativePath: strin
  * Returns the scrubbed content of a file stored in the tracking repository.
  */
 export async function inspectTrackedFile(workspaceRoot: string, relativePath: string): Promise<string> {
-  const trackingRoot = getTrackingRoot();
+  const trackingRoot = await getTrackingRoot();
   const targetFile = path.join(trackingRoot, relativePath);
-  if (!fs.existsSync(targetFile)) {
+  try {
+    await fsp.access(targetFile);
+  } catch {
     return '[Not yet tracked]';
   }
-  return fs.readFileSync(targetFile, 'utf-8');
+  return await fsp.readFile(targetFile, 'utf-8');
 }

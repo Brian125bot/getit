@@ -1,6 +1,6 @@
 import * as path from 'node:path';
 import * as os from 'node:os';
-import * as fs from 'node:fs';
+import * as fsp from 'node:fs/promises';
 import { evaluatePolicy } from './policy.js';
 import { getRuntimeSession, PolicyProfile } from '../runtime/session.js';
 import { findWorkspaceRoot, isPathInWorkspace } from '../workspace/boundary.js';
@@ -35,7 +35,7 @@ export interface PathPolicyResult {
   reason?: string;
 }
 
-export function resolveRealPath(targetPath: string): string {
+export async function resolveRealPath(targetPath: string): Promise<string> {
   let resolved = targetPath;
   if (targetPath.startsWith('~')) resolved = path.join(HOME, targetPath.slice(1));
   const absolute = path.resolve(resolved);
@@ -43,8 +43,11 @@ export function resolveRealPath(targetPath: string): string {
   let current = absolute;
   const segments: string[] = [];
   while (current && current !== path.sep) {
-    if (fs.existsSync(current)) {
-      const realParent = fs.realpathSync(current);
+    let exists = false;
+    try { await fsp.access(current); exists = true; } catch {}
+    
+    if (exists) {
+      const realParent = await fsp.realpath(current);
       return segments.length > 0 ? path.join(realParent, ...segments.reverse()) : realParent;
     }
     const base = path.basename(current);
@@ -54,12 +57,12 @@ export function resolveRealPath(targetPath: string): string {
   return absolute;
 }
 
-export function validatePath(targetPath: string, options: { cwd?: string; profile?: PolicyProfile } = {}): PathPolicyResult {
+export async function validatePath(targetPath: string, options: { cwd?: string; profile?: PolicyProfile } = {}): Promise<PathPolicyResult> {
   const profile = options.profile || getRuntimeSession().policyProfile;
   const cwd = options.cwd || process.cwd();
   let resolvedPath: string;
   try {
-    resolvedPath = resolveRealPath(targetPath);
+    resolvedPath = await resolveRealPath(targetPath);
   } catch (err: any) {
     return { allowed: false, resolvedPath: path.resolve(targetPath), reason: err.message };
   }
@@ -69,7 +72,7 @@ export function validatePath(targetPath: string, options: { cwd?: string; profil
   }
 
   // Enforce workspace boundary if workspace is active
-  const workspaceRoot = findWorkspaceRoot(cwd);
+  const workspaceRoot = await findWorkspaceRoot(cwd);
   if (workspaceRoot) {
     if (!isPathInWorkspace(resolvedPath, workspaceRoot)) {
       return { allowed: false, resolvedPath, reason: `Path "${resolvedPath}" lies outside the active workspace boundary at "${workspaceRoot}".` };
@@ -90,7 +93,7 @@ export function validatePath(targetPath: string, options: { cwd?: string; profil
     }
   }
 
-  const policy = evaluatePolicy(resolvedPath, cwd, profile);
+  const policy = await evaluatePolicy(resolvedPath, cwd, profile);
   if (!policy.allowed) {
     return { allowed: false, resolvedPath, reason: policy.reason };
   }
@@ -98,8 +101,8 @@ export function validatePath(targetPath: string, options: { cwd?: string; profil
   return { allowed: true, resolvedPath };
 }
 
-export function assertPathAllowed(targetPath: string, options: { cwd?: string; profile?: PolicyProfile } = {}): string {
-  const result = validatePath(targetPath, options);
+export async function assertPathAllowed(targetPath: string, options: { cwd?: string; profile?: PolicyProfile } = {}): Promise<string> {
+  const result = await validatePath(targetPath, options);
   if (!result.allowed) {
     throw new Error(`Security Exception: ${result.reason || `Access to path "${targetPath}" is blocked.`}`);
   }

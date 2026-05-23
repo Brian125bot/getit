@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
+import * as fsp from 'node:fs/promises';
 import { getSafeEnv } from '../security/env-scrubber.js';
 import { sanitizeBashCommand } from '../security/input-sanitizer.js';
 import { interceptToolCall } from '../mitl/interceptor.js';
@@ -27,17 +28,22 @@ export function getDefaultTimeout(): number {
   return defaultTimeout;
 }
 
-export function setActiveCwd(newCwd: string): void {
+export async function setActiveCwd(newCwd: string): Promise<void> {
   const resolved = newCwd.startsWith('~') 
     ? path.join(os.homedir(), newCwd.slice(1)) 
     : path.resolve(newCwd);
   
-  const realCwd = resolveRealPath(resolved);
-  assertPathAllowed(realCwd);
+  const realCwd = await resolveRealPath(resolved);
+  await assertPathAllowed(realCwd);
 
-  if (fs.existsSync(realCwd) && fs.statSync(realCwd).isDirectory()) {
-    activeCwd = realCwd;
-  } else {
+  try {
+    const stat = await fsp.stat(realCwd);
+    if (stat.isDirectory()) {
+      activeCwd = realCwd;
+    } else {
+      throw new Error(`Path "${newCwd}" is not a directory.`);
+    }
+  } catch {
     throw new Error(`Directory "${newCwd}" does not exist.`);
   }
 }
@@ -50,15 +56,14 @@ export interface BashExecutionResult {
   exitCode: number;
   haltTurn: boolean;
   error?: string;
+  clarifyRequest?: string;
 }
 
 export async function executeBash(command: string, workingDirectory?: string): Promise<BashExecutionResult> {
   // 1. Resolve stateful working directory if supplied
   if (workingDirectory) {
     try {
-      const realWorkingDir = resolveRealPath(workingDirectory);
-      assertPathAllowed(realWorkingDir);
-      setActiveCwd(realWorkingDir);
+      await setActiveCwd(workingDirectory);
     } catch (e: any) {
       return {
         stdout: '',
@@ -110,8 +115,9 @@ export async function executeBash(command: string, workingDirectory?: string): P
       stdout: '',
       stderr: mitlResult.reason || 'Execution denied by user.',
       exitCode: -1,
-      haltTurn: true,
-      error: 'Execution denied by user.'
+      haltTurn: !mitlResult.clarifyRequest,
+      error: mitlResult.reason || 'Execution denied by user.',
+      clarifyRequest: mitlResult.clarifyRequest
     };
   }
 
@@ -137,7 +143,7 @@ export async function executeBash(command: string, workingDirectory?: string): P
     timeoutMs: defaultTimeout
   });
 
-  recordCommand(approvedCommand, currentDir, result.exitCode);
+  await recordCommand(approvedCommand, currentDir, result.exitCode);
 
   if (result.exitCode === 0 && !result.timedOut && !result.error) {
     return {
@@ -163,7 +169,7 @@ export async function executeBash(command: string, workingDirectory?: string): P
         env: safeEnv,
         timeoutMs: defaultTimeout
       });
-      recordCommand(healMitl.payload, currentDir, healResult.exitCode);
+      await recordCommand(healMitl.payload, currentDir, healResult.exitCode);
       if (healResult.exitCode === 0) {
         console.log(`\x1b[32m❯ Remediation successful! Re-running original command: ${approvedCommand}\x1b[0m`);
         const retryResult = await executeCommandAsync(approvedCommand, {
@@ -171,7 +177,7 @@ export async function executeBash(command: string, workingDirectory?: string): P
           env: safeEnv,
           timeoutMs: defaultTimeout
         });
-        recordCommand(approvedCommand, currentDir, retryResult.exitCode);
+        await recordCommand(approvedCommand, currentDir, retryResult.exitCode);
         if (retryResult.exitCode === 0) {
           return {
             stdout: retryResult.stdout,

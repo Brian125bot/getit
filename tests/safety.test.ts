@@ -6,45 +6,46 @@ import * as fs from 'node:fs';
 
 process.env.GETIT_TEST_MODE = 'true';
 
-import { isPathSafe } from '../src/security/banned-paths.js';
+import { validatePath } from '../src/security/path-policy.js';
+const isPathSafe = async (p: string) => (await validatePath(p)).allowed;
 import { getSafeEnv } from '../src/security/env-scrubber.js';
 import { sanitizeBashCommand } from '../src/security/input-sanitizer.js';
 
 test('Safety Test Suite: Banned Paths Protection', async (t) => {
-  await t.test('should reject path matches to system configuration blocks', () => {
-    assert.strictEqual(isPathSafe('/etc'), false, 'Should block /etc');
-    assert.strictEqual(isPathSafe('/etc/shadow'), false, 'Should block files inside /etc');
-    assert.strictEqual(isPathSafe('/boot/grub'), false, 'Should block /boot');
-    assert.strictEqual(isPathSafe('/dev/sda'), false, 'Should block /dev');
-    assert.strictEqual(isPathSafe('/root/.bashrc'), false, 'Should block root user folder');
+  await t.test('should reject path matches to system configuration blocks', async () => {
+    assert.strictEqual(await isPathSafe('/etc'), false, 'Should block /etc');
+    assert.strictEqual(await isPathSafe('/etc/shadow'), false, 'Should block files inside /etc');
+    assert.strictEqual(await isPathSafe('/boot/grub'), false, 'Should block /boot');
+    assert.strictEqual(await isPathSafe('/dev/sda'), false, 'Should block /dev');
+    assert.strictEqual(await isPathSafe('/root/.bashrc'), false, 'Should block root user folder');
   });
 
-  await t.test('should reject path matches to user-level ssh directory', () => {
+  await t.test('should reject path matches to user-level ssh directory', async () => {
     const homeSsh = path.join(os.homedir(), '.ssh');
-    assert.strictEqual(isPathSafe(homeSsh), false, 'Should block ~/.ssh');
-    assert.strictEqual(isPathSafe(path.join(homeSsh, 'id_rsa')), false, 'Should block ssh key file');
+    assert.strictEqual(await isPathSafe(homeSsh), false, 'Should block ~/.ssh');
+    assert.strictEqual(await isPathSafe(path.join(homeSsh, 'id_rsa')), false, 'Should block ssh key file');
   });
 
-  await t.test('should intercept parent directory traversal attacks (../etc)', () => {
+  await t.test('should intercept parent directory traversal attacks (../etc)', async () => {
     const homeDir = os.homedir();
     const traversalPath = path.join(homeDir, '../../etc/shadow');
-    assert.strictEqual(isPathSafe(traversalPath), false, 'Should resolve traversal path and block it');
+    assert.strictEqual(await isPathSafe(traversalPath), false, 'Should resolve traversal path and block it');
   });
 
-  await t.test('should reject operations targeted directly at root directory', () => {
-    assert.strictEqual(isPathSafe('/'), false, 'Should block access to root "/"');
+  await t.test('should reject operations targeted directly at root directory', async () => {
+    assert.strictEqual(await isPathSafe('/'), false, 'Should block access to root "/"');
   });
 
-  await t.test('should accept standard working directory files', () => {
+  await t.test('should accept standard working directory files', async () => {
     const safePath = path.join(os.homedir(), 'projects/installer2/src/index.ts');
-    assert.strictEqual(isPathSafe(safePath), true, 'Standard workspace files must be safe');
+    assert.strictEqual(await isPathSafe(safePath), true, 'Standard workspace files must be safe');
   });
 
-  await t.test('should resolve symlinks and reject them if they target banned paths', () => {
+  await t.test('should resolve symlinks and reject them if they target banned paths', async () => {
     const tempSymlink = path.join(os.tmpdir(), `getit-test-symlink-${Date.now()}`);
     try {
       fs.symlinkSync('/etc/shadow', tempSymlink);
-      assert.strictEqual(isPathSafe(tempSymlink), false, 'Should block symlink targeting banned path');
+      assert.strictEqual(await isPathSafe(tempSymlink), false, 'Should block symlink targeting banned path');
     } catch (e) {
       // In some sandboxed environments, symlinks might not be supported/permitted, bypass gracefully
     } finally {
@@ -58,7 +59,7 @@ test('Safety Test Suite: Banned Paths Protection', async (t) => {
 });
 
 test('Safety Test Suite: Environment Scrubbing', async (t) => {
-  await t.test('should sterilize active api credentials and third party keys', () => {
+  await t.test('should sterilize active api credentials and third party keys', async () => {
     // Populate fake credentials
     process.env.OPENROUTER_API_KEY = 'super_secret_openrouter_api_key_123';
     process.env.GITHUB_TOKEN = 'github_personal_token_xyz';
@@ -84,7 +85,7 @@ test('Safety Test Suite: Environment Scrubbing', async (t) => {
     }
   });
 
-  await t.test('should match and strip keys dynamically containing sensitive words', () => {
+  await t.test('should match and strip keys dynamically containing sensitive words', async () => {
     process.env.MY_DATABASE_PASSWORD = 'db_password_123';
     process.env.SLACK_WEBHOOK_SECRET = 'slack_sec';
 
@@ -98,7 +99,7 @@ test('Safety Test Suite: Environment Scrubbing', async (t) => {
     }
   });
 
-  await t.test('should match and strip keys case-insensitively', () => {
+  await t.test('should match and strip keys case-insensitively', async () => {
     process.env.my_api_key = 'some_key';
     process.env.My_Aws_Token = 'some_token';
     process.env.DB_PASSWORD = 'pass';
@@ -120,7 +121,7 @@ test('Safety Test Suite: Environment Scrubbing', async (t) => {
 });
 
 test('Safety Test Suite: Bash Cascade & Shell Injection Detection', async (t) => {
-  await t.test('should flag commands containing logical execution chains (&&, ||)', () => {
+  await t.test('should flag commands containing logical execution chains (&&, ||)', async () => {
     const res1 = sanitizeBashCommand('apt-get update && apt-get install -y ripgrep');
     assert.strictEqual(res1.isSafe, false);
     assert.ok(res1.warnings.some(w => w.includes('&&')));
@@ -130,13 +131,13 @@ test('Safety Test Suite: Bash Cascade & Shell Injection Detection', async (t) =>
     assert.ok(res2.warnings.some(w => w.includes('||')));
   });
 
-  await t.test('should flag command separation semicolons', () => {
+  await t.test('should flag command separation semicolons', async () => {
     const res = sanitizeBashCommand('cd ~/.local/bin; ls -la');
     assert.strictEqual(res.isSafe, false);
     assert.ok(res.warnings.some(w => w.includes(';')));
   });
 
-  await t.test('should flag subshells and backticks command expansions', () => {
+  await t.test('should flag subshells and backticks command expansions', async () => {
     const res1 = sanitizeBashCommand('echo `whoami`');
     assert.strictEqual(res1.isSafe, false);
     assert.ok(res1.warnings.some(w => w.includes('`')));
@@ -146,7 +147,7 @@ test('Safety Test Suite: Bash Cascade & Shell Injection Detection', async (t) =>
     assert.ok(res2.warnings.some(w => w.includes('$(...)')));
   });
 
-  await t.test('should flag file append and output redirection operators', () => {
+  await t.test('should flag file append and output redirection operators', async () => {
     const res1 = sanitizeBashCommand('echo "malicious" >> ~/.bashrc');
     assert.strictEqual(res1.isSafe, false);
     assert.ok(res1.warnings.some(w => w.includes('>>')));
@@ -156,13 +157,13 @@ test('Safety Test Suite: Bash Cascade & Shell Injection Detection', async (t) =>
     assert.ok(res2.warnings.some(w => w.includes('">"')));
   });
 
-  await t.test('should accept plain simple commands with no cascades', () => {
+  await t.test('should accept plain simple commands with no cascades', async () => {
     const res = sanitizeBashCommand('which curl');
     assert.strictEqual(res.isSafe, true);
     assert.strictEqual(res.warnings.length, 0);
   });
 
-  await t.test('should flag potentially hazardous command patterns (rm -rf, dd, etc.)', () => {
+  await t.test('should flag potentially hazardous command patterns (rm -rf, dd, etc.)', async () => {
     const rmRfRes = sanitizeBashCommand('rm -rf /');
     assert.strictEqual(rmRfRes.isSafe, false);
     assert.ok(rmRfRes.warnings.some(w => w.includes('potentially hazardous command pattern')));

@@ -1,4 +1,4 @@
-import * as fs from 'node:fs';
+import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
 import * as os from 'node:os';
@@ -64,18 +64,18 @@ export async function initWorkspaceManifest(rootPath: string): Promise<Workspace
     trackedPaths: {}
   };
 
-  ensureProfileLayout(rootPath, fingerprint);
+  await ensureProfileLayout(rootPath, fingerprint);
 
-  const trackCandidates = [...CONFIG_CANDIDATES, ...collectProfileCandidatePaths(rootPath, fingerprint)];
+  const trackCandidates = [...CONFIG_CANDIDATES, ...(await collectProfileCandidatePaths(rootPath, fingerprint))];
 
   for (const candidate of trackCandidates) {
     if (manifest.trackedPaths[candidate]) continue;
 
     const fullPath = path.join(rootPath, candidate);
-    if (fs.existsSync(fullPath)) {
-      const stat = fs.statSync(fullPath);
+    try {
+      const stat = await fsp.stat(fullPath);
       if (stat.isFile()) {
-        const content = fs.readFileSync(fullPath, 'utf-8');
+        const content = await fsp.readFile(fullPath, 'utf-8');
         const hash = computeScrubbedHash(content);
         manifest.trackedPaths[candidate] = {
           hash,
@@ -83,25 +83,26 @@ export async function initWorkspaceManifest(rootPath: string): Promise<Workspace
           mtime: stat.mtimeMs
         };
       }
-    }
+    } catch {}
   }
 
   const manifestPath = path.join(rootPath, MANIFEST_FILENAME);
-  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
+  await fsp.writeFile(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
   
   return manifest;
 }
 
-export function loadWorkspaceManifest(rootPath: string): WorkspaceManifest {
+export async function loadWorkspaceManifest(rootPath: string): Promise<WorkspaceManifest> {
   const manifestPath = path.join(rootPath, MANIFEST_FILENAME);
-  if (!fs.existsSync(manifestPath)) {
+  try {
+    const content = await fsp.readFile(manifestPath, 'utf-8');
+    return JSON.parse(content) as WorkspaceManifest;
+  } catch (e) {
     throw new Error(`Manifest not found at ${manifestPath}`);
   }
-  const content = fs.readFileSync(manifestPath, 'utf-8');
-  return JSON.parse(content) as WorkspaceManifest;
 }
 
-export function saveWorkspaceManifest(rootPath: string, manifest: WorkspaceManifest): void {
+export async function saveWorkspaceManifest(rootPath: string, manifest: WorkspaceManifest): Promise<void> {
   const manifestPath = path.join(rootPath, MANIFEST_FILENAME);
-  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
+  await fsp.writeFile(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
 }

@@ -2,20 +2,21 @@ import { executeBash } from './execute-bash.js';
 import { manageFile } from './manage-file.js';
 import { getRuntimeSession } from '../runtime/session.js';
 import { isMutatingToolCall, PlannedToolCall, PlannedToolName } from '../planning/plan-queue.js';
-import * as fs from 'node:fs';
+import * as fsp from 'node:fs/promises';
 import { assertPathAllowed } from '../security/path-policy.js';
 import { scrubText } from '../security/scrubber.js';
 
 export interface ToolDispatchResult {
   content: string;
   haltTurn: boolean;
+  clarifyRequest?: string;
 }
 
 export async function dispatchToolCall(name: string, args: any): Promise<ToolDispatchResult> {
   try {
     const session = getRuntimeSession();
     if (session.dryRun && (name === 'execute_bash' || name === 'manage_file')) {
-      return dispatchDryRunToolCall(name, args);
+      return await dispatchDryRunToolCall(name as PlannedToolName, args);
     }
 
     if (name === 'execute_bash') {
@@ -34,7 +35,8 @@ export async function dispatchToolCall(name: string, args: any): Promise<ToolDis
           exitCode: result.exitCode,
           error: result.error
         }),
-        haltTurn: result.haltTurn
+        haltTurn: result.haltTurn,
+        clarifyRequest: result.clarifyRequest
       };
     }
 
@@ -52,11 +54,12 @@ export async function dispatchToolCall(name: string, args: any): Promise<ToolDis
       const result = await manageFile(action, filePath, content, search, replace);
       
       // Halts the turn if the action failed (e.g. search block not found, denied, safety exception)
-      const haltTurn = !result.success;
+      const haltTurn = !result.success && !result.clarifyRequest;
 
       return {
         content: JSON.stringify(result),
-        haltTurn
+        haltTurn,
+        clarifyRequest: result.clarifyRequest
       };
     }
 
@@ -72,7 +75,7 @@ export async function dispatchToolCall(name: string, args: any): Promise<ToolDis
   }
 }
 
-function dispatchDryRunToolCall(name: PlannedToolName, args: any): ToolDispatchResult {
+async function dispatchDryRunToolCall(name: PlannedToolName, args: any): Promise<ToolDispatchResult> {
   const session = getRuntimeSession();
   const mutating = isMutatingToolCall(name, args);
   const id = `plan_${session.planQueue.all().length + 1}`;
@@ -86,8 +89,10 @@ function dispatchDryRunToolCall(name: PlannedToolName, args: any): ToolDispatchR
 
   if (name === 'manage_file' && args?.action === 'read') {
     const filePath = args.path;
-    if (filePath && fs.existsSync(filePath) && !session.planQueue.hasScheduledCreate(filePath)) {
-      return executeDryRunRead(args);
+    let exists = false;
+    try { await fsp.access(filePath); exists = true; } catch {}
+    if (filePath && exists && !session.planQueue.hasScheduledCreate(filePath)) {
+      return await executeDryRunRead(args);
     }
     session.planQueue.add(call);
     return {
@@ -113,13 +118,14 @@ function dispatchDryRunToolCall(name: PlannedToolName, args: any): ToolDispatchR
   };
 }
 
-function executeDryRunRead(args: any): ToolDispatchResult {
-  assertPathAllowed(args.path);
+async function executeDryRunRead(args: any): Promise<ToolDispatchResult> {
+  await assertPathAllowed(args.path);
   const session = getRuntimeSession();
+  const content = await fsp.readFile(args.path, 'utf-8');
   return {
     content: JSON.stringify({
       success: true,
-      content: scrubText(fs.readFileSync(args.path, 'utf-8'), session.maskingSession),
+      content: scrubText(content, session.maskingSession),
       dryRun: true,
       liveRead: true
     }),

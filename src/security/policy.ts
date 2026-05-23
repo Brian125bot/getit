@@ -1,4 +1,4 @@
-import * as fs from 'node:fs';
+import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { PolicyProfile } from '../runtime/session.js';
@@ -17,27 +17,27 @@ export function getXdgConfigHome(): string {
   return process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
 }
 
-export function loadPolicy(startDir: string): LoadedPolicy {
+export async function loadPolicy(startDir: string): Promise<LoadedPolicy> {
   const block: PolicyRule[] = [];
   const allow: PolicyRule[] = [];
 
-  for (const filePath of findGetitIgnoreFiles(startDir)) {
-    for (const pattern of readIgnorePatterns(filePath)) {
+  for (const filePath of await findGetitIgnoreFiles(startDir)) {
+    for (const pattern of await readIgnorePatterns(filePath)) {
       block.push({ pattern: absolutizePattern(pattern, path.dirname(filePath)), source: filePath });
     }
   }
 
   const globalPath = path.join(getXdgConfigHome(), 'getit', 'policy.json');
-  if (fs.existsSync(globalPath)) {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(globalPath, 'utf-8'));
-      for (const pattern of asStringArray(parsed.block || parsed.blocks || parsed.deny)) {
-        block.push({ pattern, source: globalPath });
-      }
-      for (const pattern of asStringArray(parsed.allow || parsed.allows || parsed.whitelist)) {
-        allow.push({ pattern, source: globalPath });
-      }
-    } catch {
+  try {
+    const parsed = JSON.parse(await fsp.readFile(globalPath, 'utf-8'));
+    for (const pattern of asStringArray(parsed.block || parsed.blocks || parsed.deny)) {
+      block.push({ pattern, source: globalPath });
+    }
+    for (const pattern of asStringArray(parsed.allow || parsed.allows || parsed.whitelist)) {
+      allow.push({ pattern, source: globalPath });
+    }
+  } catch (err: any) {
+    if (err.code !== 'ENOENT') {
       block.push({ pattern: '**', source: `${globalPath} (invalid JSON fail-closed)` });
     }
   }
@@ -45,8 +45,8 @@ export function loadPolicy(startDir: string): LoadedPolicy {
   return { block, allow };
 }
 
-export function evaluatePolicy(targetPath: string, cwd: string, profile: PolicyProfile): { allowed: boolean; reason?: string } {
-  const policy = loadPolicy(cwd);
+export async function evaluatePolicy(targetPath: string, cwd: string, profile: PolicyProfile): Promise<{ allowed: boolean; reason?: string }> {
+  const policy = await loadPolicy(cwd);
 
   for (const rule of policy.block) {
     if (globMatch(rule.pattern, targetPath)) {
@@ -64,12 +64,15 @@ export function evaluatePolicy(targetPath: string, cwd: string, profile: PolicyP
   return { allowed: true };
 }
 
-function findGetitIgnoreFiles(startDir: string): string[] {
+async function findGetitIgnoreFiles(startDir: string): Promise<string[]> {
   const files: string[] = [];
   let current = path.resolve(startDir);
   while (true) {
     const candidate = path.join(current, '.getitignore');
-    if (fs.existsSync(candidate)) files.unshift(candidate);
+    try {
+      await fsp.access(candidate);
+      files.unshift(candidate);
+    } catch {}
     const parent = path.dirname(current);
     if (parent === current) break;
     current = parent;
@@ -77,9 +80,10 @@ function findGetitIgnoreFiles(startDir: string): string[] {
   return files;
 }
 
-function readIgnorePatterns(filePath: string): string[] {
+async function readIgnorePatterns(filePath: string): Promise<string[]> {
   try {
-    return fs.readFileSync(filePath, 'utf-8')
+    const content = await fsp.readFile(filePath, 'utf-8');
+    return content
       .split(/\r?\n/)
       .map((line) => line.trim())
       .filter((line) => line && !line.startsWith('#'));

@@ -1,0 +1,3 @@
+tests/phase3-profiles.test.ts(29,26): error TS2339: Property 'includes' does not exist on type 'Promise<string[]>'.
+tests/safety.test.ts(10,35): error TS1308: 'await' expressions are only allowed within async functions and at the top levels of modules.
+tests/safety.test.ts(10,57): error TS2339: Property 'allowed' does not exist on type 'Promise<PathPolicyResult>'.

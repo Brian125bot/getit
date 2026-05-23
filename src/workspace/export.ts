@@ -1,4 +1,4 @@
-import * as fs from 'node:fs';
+import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import { loadWorkspaceManifest } from './manifest.js';
 import { scrubContentGeneric } from './tracking.js';
@@ -17,33 +17,35 @@ export async function exportScrubbedWorkspace(
   workspaceRoot: string,
   outputDir?: string
 ): Promise<ExportResult> {
-  const manifest = loadWorkspaceManifest(workspaceRoot);
+  const manifest = await loadWorkspaceManifest(workspaceRoot);
   const resolvedOut = outputDir
     ? path.resolve(outputDir)
     : path.join(workspaceRoot, `.getit-export-${Date.now()}`);
 
-  fs.mkdirSync(resolvedOut, { recursive: true });
+  await fsp.mkdir(resolvedOut, { recursive: true });
 
   const filesExported: string[] = [];
 
   for (const relPath of Object.keys(manifest.trackedPaths).sort()) {
     const livePath = resolveLiveFilePath(workspaceRoot, relPath);
-    if (!fs.existsSync(livePath)) {
+    try {
+      await fsp.access(livePath);
+    } catch {
       continue;
     }
 
-    const stat = fs.statSync(livePath);
+    const stat = await fsp.stat(livePath);
     if (!stat.isFile()) {
       continue;
     }
 
-    const raw = fs.readFileSync(livePath, 'utf-8');
+    const raw = await fsp.readFile(livePath, 'utf-8');
     const scrubbed = scrubContentGeneric(raw);
     const targetPath = path.join(resolvedOut, relPath);
 
-    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-    fs.writeFileSync(targetPath, scrubbed, 'utf-8');
-    fs.chmodSync(targetPath, stat.mode);
+    await fsp.mkdir(path.dirname(targetPath), { recursive: true });
+    await fsp.writeFile(targetPath, scrubbed, 'utf-8');
+    await fsp.chmod(targetPath, stat.mode);
     filesExported.push(relPath);
   }
 
@@ -53,7 +55,7 @@ export async function exportScrubbedWorkspace(
     fileCount: filesExported.length,
     paths: filesExported
   };
-  fs.writeFileSync(
+  await fsp.writeFile(
     path.join(resolvedOut, 'export-manifest.json'),
     JSON.stringify(manifestCopy, null, 2),
     'utf-8'

@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import * as fs from 'node:fs';
+import * as fsp from 'node:fs/promises';
 import * as os from 'node:os';
 import { MANIFEST_FILENAME } from './manifest.js';
 
@@ -7,13 +7,14 @@ import { MANIFEST_FILENAME } from './manifest.js';
  * Finds the nearest workspace root by walking up from the start directory
  * looking for the presence of the .getit-manifest.json file.
  */
-export function findWorkspaceRoot(startDir: string): string | null {
+export async function findWorkspaceRoot(startDir: string): Promise<string | null> {
   let current = path.resolve(startDir);
   while (true) {
     const manifestPath = path.join(current, MANIFEST_FILENAME);
-    if (fs.existsSync(manifestPath)) {
+    try {
+      await fsp.access(manifestPath);
       return current;
-    }
+    } catch {}
     const parent = path.dirname(current);
     if (parent === current) {
       break;

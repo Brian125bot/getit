@@ -1,6 +1,5 @@
-import * as fs from 'node:fs';
+import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
-import { readFile } from 'node:fs/promises';
 import { loadWorkspaceManifest, WorkspaceManifest, computeScrubbedHash, CONFIG_CANDIDATES } from './manifest.js';
 import { collectProfileCandidatePaths } from './profiles.js';
 
@@ -25,12 +24,14 @@ async function evaluateTrackedEntry(
 ): Promise<FileDriftStatus> {
   const liveFile = path.join(workspaceRoot, relPath);
 
-  if (!fs.existsSync(liveFile)) {
+  try {
+    await fsp.access(liveFile);
+  } catch {
     return { path: relPath, status: 'missing', manifestHash: meta.hash };
   }
 
   try {
-    const liveContent = await readFile(liveFile, 'utf-8');
+    const liveContent = await fsp.readFile(liveFile, 'utf-8');
     const liveHash = computeScrubbedHash(liveContent);
 
     if (liveHash !== meta.hash) {
@@ -59,7 +60,7 @@ async function evaluateTrackedEntry(
 export async function detectWorkspaceDrift(workspaceRoot: string): Promise<DriftResult> {
   let manifest: WorkspaceManifest;
   try {
-    manifest = loadWorkspaceManifest(workspaceRoot);
+    manifest = await loadWorkspaceManifest(workspaceRoot);
   } catch {
     throw new Error(`Drift check failed: active workspace manifest not found in ${workspaceRoot}`);
   }
@@ -83,7 +84,7 @@ export async function detectWorkspaceDrift(workspaceRoot: string): Promise<Drift
     }
   }
 
-  const profileCandidates = collectProfileCandidatePaths(workspaceRoot, manifest.fingerprint);
+  const profileCandidates = await collectProfileCandidatePaths(workspaceRoot, manifest.fingerprint);
   const allCandidates = [...CONFIG_CANDIDATES, ...profileCandidates];
 
   for (const candidate of allCandidates) {
@@ -91,16 +92,14 @@ export async function detectWorkspaceDrift(workspaceRoot: string): Promise<Drift
       continue;
     }
     const liveFile = path.join(workspaceRoot, candidate);
-    if (fs.existsSync(liveFile)) {
-      try {
-        const stat = fs.statSync(liveFile);
-        if (stat.isFile()) {
-          result.push({ path: candidate, status: 'untracked' });
-          hasDrift = true;
-        }
-      } catch {
-        // skip inaccessible candidates
+    try {
+      const stat = await fsp.stat(liveFile);
+      if (stat.isFile()) {
+        result.push({ path: candidate, status: 'untracked' });
+        hasDrift = true;
       }
+    } catch {
+      // skip inaccessible candidates
     }
   }
 

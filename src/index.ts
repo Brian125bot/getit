@@ -107,7 +107,7 @@ export async function runWorkspaceResolve(workspaceRoot: string): Promise<void> 
     return;
   }
 
-  const manifest = loadWorkspaceManifest(workspaceRoot);
+  const manifest = await loadWorkspaceManifest(workspaceRoot);
   const rl = getReadlineInterface();
 
   for (const file of filesToResolve) {
@@ -139,7 +139,7 @@ export async function runWorkspaceResolve(workspaceRoot: string): Promise<void> 
             mode: stat.mode,
             mtime: stat.mtimeMs
           };
-          saveWorkspaceManifest(workspaceRoot, manifest);
+          await saveWorkspaceManifest(workspaceRoot, manifest);
           console.log(centerLine(`\x1b[32m  ✓ Staged and updated tracking for ${file.path}\x1b[0m`, file.path.length + 37));
         } else {
           console.log(centerLine(`\x1b[33m  Skipped ${file.path}\x1b[0m`, file.path.length + 10));
@@ -170,7 +170,7 @@ export async function runWorkspaceResolve(workspaceRoot: string): Promise<void> 
             mode: stat.mode,
             mtime: stat.mtimeMs
           };
-          saveWorkspaceManifest(workspaceRoot, manifest);
+          await saveWorkspaceManifest(workspaceRoot, manifest);
           console.log(centerLine(`\x1b[32m  ✓ Staged and started tracking for ${file.path}\x1b[0m`, file.path.length + 37));
         } else {
           console.log(centerLine(`\x1b[33m  Skipped ${file.path}\x1b[0m`, file.path.length + 10));
@@ -184,19 +184,20 @@ export async function runWorkspaceResolve(workspaceRoot: string): Promise<void> 
         const answer = await rl.question(prompt);
         if (answer.trim().toLowerCase() === 'y') {
           delete manifest.trackedPaths[file.path];
-          saveWorkspaceManifest(workspaceRoot, manifest);
+          await saveWorkspaceManifest(workspaceRoot, manifest);
           
-          const trackingRoot = getTrackingRoot();
+          const trackingRoot = await getTrackingRoot();
           const targetFile = join(trackingRoot, file.path);
           if (existsSync(targetFile)) {
             unlinkSync(targetFile);
           }
           try {
-            const { execFileSync } = await import('node:child_process');
-            execFileSync('git', ['rm', file.path], { cwd: trackingRoot, stdio: 'ignore' });
-            execFileSync('git', ['commit', '-m', `Tracked configuration removal: ${file.path}`], {
+            const { execFile: execFileCb } = await import('node:child_process');
+            const { promisify } = await import('node:util');
+            const execFile = promisify(execFileCb);
+            await execFile('git', ['rm', file.path], { cwd: trackingRoot });
+            await execFile('git', ['commit', '-m', `Tracked configuration removal: ${file.path}`], {
               cwd: trackingRoot,
-              stdio: 'ignore',
               env: {
                 ...process.env,
                 GIT_AUTHOR_NAME: 'getit-agent',
@@ -399,11 +400,11 @@ async function bootstrap() {
 
   // 9. Interactive REPL Loop
   // Draw Dashboard welcome banner
-  const root = findWorkspaceRoot(process.cwd());
+  const root = await findWorkspaceRoot(process.cwd());
   let workspaceBanner = '';
   if (root) {
     try {
-      const manifest = loadWorkspaceManifest(root);
+      const manifest = await loadWorkspaceManifest(root);
       const count = Object.keys(manifest.trackedPaths).length;
       workspaceBanner = `│ \x1b[1;32mWorkspace:\x1b[0m TRACKED (\x1b[1;37m${count}\x1b[0m files) \x1b[1;36m                              │\n` +
                         `├────────────────────────────────────────────────────────┤\n`;
@@ -570,7 +571,7 @@ async function handleSlashCommand(input: string, agent: AgentLoop, systemPrompt:
     }
     case '/status': {
       try {
-        const wsRoot = findWorkspaceRoot(process.cwd());
+        const wsRoot = await findWorkspaceRoot(process.cwd());
         if (!wsRoot) {
           console.log('\x1b[31m  Error: No active workspace. Run "getit manifest init" first.\x1b[0m\n');
           return;
@@ -604,7 +605,7 @@ async function handleSlashCommand(input: string, agent: AgentLoop, systemPrompt:
     case '/stage':
     case '/resolve': {
       try {
-        const workspaceRoot = findWorkspaceRoot(process.cwd());
+        const workspaceRoot = await findWorkspaceRoot(process.cwd());
         if (!workspaceRoot) {
           console.log('\x1b[31m  Error: No active workspace found. Please initialize workspace tracking using "getit manifest init" first.\x1b[0m\n');
         } else {
@@ -617,7 +618,7 @@ async function handleSlashCommand(input: string, agent: AgentLoop, systemPrompt:
     }
     case '/export': {
       try {
-        const wsRoot = findWorkspaceRoot(process.cwd());
+        const wsRoot = await findWorkspaceRoot(process.cwd());
         if (!wsRoot) {
           console.log('\x1b[31m  Error: No active workspace. Run "getit manifest init" first.\x1b[0m\n');
           return;
@@ -658,7 +659,7 @@ async function handleSlashCommand(input: string, agent: AgentLoop, systemPrompt:
       return;
     case '/log':
     case '/history': {
-      const commits = WorkspaceHistoryManager.getHistory();
+      const commits = await WorkspaceHistoryManager.getHistory();
       const card = WorkspaceHistoryManager.renderHistory(commits);
       console.log('\n' + card + '\n');
       return;
@@ -910,7 +911,7 @@ async function handleWorkspaceCli(positionals: string[], values: any) {
 
   if (cmd === 'status') {
     try {
-      const wsRoot = findWorkspaceRoot(process.cwd());
+      const wsRoot = await findWorkspaceRoot(process.cwd());
       if (!wsRoot) {
         console.error(`\x1b[31mError: No active workspace found. Run "getit manifest init" first.\x1b[0m`);
         process.exit(1);
@@ -946,7 +947,7 @@ async function handleWorkspaceCli(positionals: string[], values: any) {
   if (cmd === 'export') {
     const outputDir = positionals[1];
     try {
-      const wsRoot = findWorkspaceRoot(process.cwd());
+      const wsRoot = await findWorkspaceRoot(process.cwd());
       if (!wsRoot) {
         console.error(`\x1b[31mError: No active workspace found. Run "getit manifest init" first.\x1b[0m`);
         process.exit(1);
@@ -981,7 +982,7 @@ async function handleWorkspaceCli(positionals: string[], values: any) {
 
   if (cmd === 'resolve' || cmd === 'stage') {
     try {
-      const workspaceRoot = findWorkspaceRoot(process.cwd());
+      const workspaceRoot = await findWorkspaceRoot(process.cwd());
       if (!workspaceRoot) {
         console.error(`\x1b[31mError: No active workspace found. Please initialize workspace tracking using "getit manifest init" first.\x1b[0m`);
         process.exit(1);
@@ -997,7 +998,7 @@ async function handleWorkspaceCli(positionals: string[], values: any) {
 
   if (cmd === 'history' || cmd === 'log') {
     try {
-      const commits = WorkspaceHistoryManager.getHistory();
+      const commits = await WorkspaceHistoryManager.getHistory();
       const card = WorkspaceHistoryManager.renderHistory(commits);
       console.log('\n' + card + '\n');
       process.exit(0);

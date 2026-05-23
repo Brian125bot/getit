@@ -1,4 +1,4 @@
-import * as fs from 'node:fs';
+import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
 
@@ -43,47 +43,40 @@ export function getLedgerPath(): string {
   return path.join(getBackupRoot(), 'ledger.json');
 }
 
-export function ensureBackupRoot(): void {
-  mkdirp(path.join(getBackupRoot(), 'snapshots'));
-  if (!fs.existsSync(getLedgerPath())) {
-    fs.writeFileSync(getLedgerPath(), JSON.stringify({ transactions: [] }, null, 2), 'utf-8');
-  }
-}
-
-function mkdirp(dirPath: string): void {
-  const parsed = path.parse(dirPath);
-  let current = parsed.root;
-  for (const part of dirPath.slice(parsed.root.length).split(path.sep)) {
-    if (!part) continue;
-    current = path.join(current, part);
-    if (!fs.existsSync(current)) {
-      fs.mkdirSync(current);
-    }
-  }
-}
-
-export function readLedger(): LedgerFile {
-  ensureBackupRoot();
+export async function ensureBackupRoot(): Promise<void> {
+  await fsp.mkdir(path.join(getBackupRoot(), 'snapshots'), { recursive: true });
   try {
-    return JSON.parse(fs.readFileSync(getLedgerPath(), 'utf-8')) as LedgerFile;
+    await fsp.access(getLedgerPath());
+  } catch {
+    await fsp.writeFile(getLedgerPath(), JSON.stringify({ transactions: [] }, null, 2), 'utf-8');
+  }
+}
+
+export async function readLedger(): Promise<LedgerFile> {
+  await ensureBackupRoot();
+  try {
+    return JSON.parse(await fsp.readFile(getLedgerPath(), 'utf-8')) as LedgerFile;
   } catch {
     return { transactions: [] };
   }
 }
 
-export function appendOperation(transactionId: string, promptId: string, operation: LedgerOperation): void {
-  ensureBackupRoot();
-  const ledger = readLedger();
+export async function appendOperation(transactionId: string, promptId: string, operation: LedgerOperation): Promise<void> {
+  await ensureBackupRoot();
+  const ledger = await readLedger();
   let tx = ledger.transactions.find((item) => item.transactionId === transactionId);
   if (!tx) {
     tx = { transactionId, promptId, timestamp: new Date().toISOString(), operations: [] };
     ledger.transactions.push(tx);
   }
   tx.operations.push(operation);
-  fs.writeFileSync(getLedgerPath(), JSON.stringify(ledger, null, 2), 'utf-8');
+  
+  const tempPath = `${getLedgerPath()}.tmp-${process.pid}-${Date.now()}`;
+  await fsp.writeFile(tempPath, JSON.stringify(ledger, null, 2), 'utf-8');
+  await fsp.rename(tempPath, getLedgerPath());
 }
 
-export function latestTransaction(): LedgerTransaction | undefined {
-  const ledger = readLedger();
+export async function latestTransaction(): Promise<LedgerTransaction | undefined> {
+  const ledger = await readLedger();
   return ledger.transactions[ledger.transactions.length - 1];
 }

@@ -25,10 +25,10 @@ test('Phase 3 Profiles: manifest init creates common/ and profiles/<fingerprint>
     fs.writeFileSync(profileConfig, 'HOST=dev\n', 'utf-8');
 
     const rel = path.join(PROFILES_DIR, manifest.fingerprint, 'machine.env').replace(/\\/g, '/');
-    const candidates = collectProfileCandidatePaths(tempDir, manifest.fingerprint);
+    const candidates = await collectProfileCandidatePaths(tempDir, manifest.fingerprint);
     assert.ok(candidates.includes(rel));
 
-    const manifest2 = loadWorkspaceManifest(tempDir);
+    const manifest2 = await loadWorkspaceManifest(tempDir);
     assert.ok(!manifest2.trackedPaths[rel]);
 
     fs.writeFileSync(path.join(tempDir, '.getit-manifest.json'), JSON.stringify(manifest2), 'utf-8');
@@ -43,13 +43,13 @@ test('Phase 3 Profiles: common/ files are tracked on re-init', async () => {
 
   try {
     await initWorkspaceManifest(tempDir);
-    const first = loadWorkspaceManifest(tempDir);
+    const first = await loadWorkspaceManifest(tempDir);
 
     const sharedPath = path.join(tempDir, COMMON_DIR, 'shared.env');
     fs.writeFileSync(sharedPath, 'SHARED=1\n', 'utf-8');
 
     await initWorkspaceManifest(tempDir);
-    const second = loadWorkspaceManifest(tempDir);
+    const second = await loadWorkspaceManifest(tempDir);
 
     const rel = `${COMMON_DIR}/shared.env`;
     assert.ok(second.trackedPaths[rel], 'common/shared.env should be tracked after re-init');

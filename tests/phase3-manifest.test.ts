@@ -13,7 +13,7 @@ test('Phase 3 Manifest: init writes metadata-only JSON (WKS_001)', async () => {
     fs.writeFileSync(path.join(tempDir, '.env'), secretContent, 'utf-8');
     fs.writeFileSync(path.join(tempDir, 'package.json'), '{"name":"x"}', 'utf-8');
 
-    const manifest = await initWorkspaceManifest(tempDir);
+    const manifest = await await initWorkspaceManifest(tempDir);
     const raw = fs.readFileSync(path.join(tempDir, MANIFEST_FILENAME), 'utf-8');
 
     assert.ok(manifest.fingerprint.length > 0);
@@ -26,7 +26,7 @@ test('Phase 3 Manifest: init writes metadata-only JSON (WKS_001)', async () => {
     assert.ok(raw.includes('"mode"'));
     assert.ok(raw.includes('"mtime"'));
 
-    const loaded = loadWorkspaceManifest(tempDir);
+    const loaded = await loadWorkspaceManifest(tempDir);
     assert.strictEqual(loaded.fingerprint, manifest.fingerprint);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
@@ -45,8 +45,8 @@ test('Phase 3 Manifest: boundary traversal blocked outside workspace (WKS_002)',
     const { configureRuntimeSession } = await import('../src/runtime/session.js');
     configureRuntimeSession({ policyProfile: 'normal' });
 
-    const inside = validatePath(path.join(tempDir, 'safe.txt'), { cwd: tempDir });
-    const outside = validatePath(outerFile, { cwd: tempDir });
+    const inside = await validatePath(path.join(tempDir, 'safe.txt'), { cwd: tempDir });
+    const outside = await validatePath(outerFile, { cwd: tempDir });
 
     fs.writeFileSync(path.join(tempDir, 'safe.txt'), 'ok', 'utf-8');
     assert.strictEqual(inside.allowed, true);

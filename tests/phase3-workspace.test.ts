@@ -15,7 +15,7 @@ test('Phase 3 Workspace: Manifest Initialization & Load', async () => {
     fs.writeFileSync(path.join(tempDir, 'package.json'), JSON.stringify({ name: 'test-project' }), 'utf-8');
     
     // Init manifest
-    const manifest = await initWorkspaceManifest(tempDir);
+    const manifest = await await initWorkspaceManifest(tempDir);
     
     assert.ok(manifest.fingerprint);
     assert.strictEqual(manifest.platform, os.platform());
@@ -23,7 +23,7 @@ test('Phase 3 Workspace: Manifest Initialization & Load', async () => {
     assert.ok(fs.existsSync(path.join(tempDir, MANIFEST_FILENAME)));
 
     // Load manifest
-    const loaded = loadWorkspaceManifest(tempDir);
+    const loaded = await loadWorkspaceManifest(tempDir);
     assert.strictEqual(loaded.fingerprint, manifest.fingerprint);
     assert.strictEqual(loaded.platform, manifest.platform);
     assert.strictEqual(loaded.trackedPaths['package.json'].hash, manifest.trackedPaths['package.json'].hash);
@@ -32,7 +32,7 @@ test('Phase 3 Workspace: Manifest Initialization & Load', async () => {
   }
 });
 
-test('Phase 3 Workspace: Root climbing search', () => {
+test('Phase 3 Workspace: Root climbing search', async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'getit-root-'));
   const subSubDir = path.join(tempDir, 'src', 'workspace');
   fs.mkdirSync(subSubDir, { recursive: true });
@@ -51,7 +51,7 @@ test('Phase 3 Workspace: Root climbing search', () => {
   }
 });
 
-test('Phase 3 Workspace: Boundary traversal enforcement', () => {
+test('Phase 3 Workspace: Boundary traversal enforcement', async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'getit-boundary-'));
   const outerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'getit-outer-'));
   
@@ -82,7 +82,7 @@ test('Phase 3 Workspace: Boundary traversal enforcement', () => {
   }
 });
 
-test('Phase 3 Workspace: Path Policy Integration', () => {
+test('Phase 3 Workspace: Path Policy Integration', async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'getit-policy-int-'));
   const outsideFile = path.join(os.tmpdir(), 'forbidden-file.txt');
   fs.writeFileSync(outsideFile, 'secret', 'utf-8');
@@ -98,11 +98,11 @@ test('Phase 3 Workspace: Path Policy Integration', () => {
     configureRuntimeSession({ policyProfile: 'normal' });
 
     // Validate normal inside path
-    const insideResult = validatePath(insideFile, { cwd: tempDir });
+    const insideResult = await validatePath(insideFile, { cwd: tempDir });
     assert.strictEqual(insideResult.allowed, true);
 
     // Validate path outside workspace (should be blocked due to active workspace manifest)
-    const outsideResult = validatePath(outsideFile, { cwd: tempDir });
+    const outsideResult = await validatePath(outsideFile, { cwd: tempDir });
     assert.strictEqual(outsideResult.allowed, false);
     assert.ok(outsideResult.reason?.includes('lies outside the active workspace boundary'));
   } finally {

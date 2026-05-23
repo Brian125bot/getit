@@ -138,7 +138,12 @@ export class AgentLoop {
               content: dispatchResult.content
             });
 
-            if (dispatchResult.haltTurn) {
+            if (dispatchResult.clarifyRequest) {
+              this.messages.push({
+                role: 'user',
+                content: dispatchResult.clarifyRequest
+              });
+            } else if (dispatchResult.haltTurn) {
               haltLoop = true;
               console.log(`\x1b[1;31m[getit] Fail-Closed: Execution generated a halt signal. Halting automatic agent iterations.\x1b[0m`);
             }

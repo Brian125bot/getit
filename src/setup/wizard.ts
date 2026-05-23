@@ -1,4 +1,4 @@
-import * as fs from 'node:fs';
+import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { getReadlineInterface } from '../mitl/interceptor.js';
@@ -230,7 +230,7 @@ export async function runSetupWizard(): Promise<string> {
       saveChoice === '1' ? path.join(process.cwd(), '.env') :
       saveChoice === '2' ? path.join(process.cwd(), '.getitrc') :
       path.join(os.homedir(), '.getitrc');
-    writeConfigToFile(targetFile, finalConfig);
+    await writeConfigToFile(targetFile, finalConfig);
     console.log(centerBlock(`\x1b[32m  Saved to ${targetFile}\x1b[0m`));
   } else {
     console.log(centerBlock('\x1b[33m  Session-only (not persisted to disk).\x1b[0m'));
@@ -244,11 +244,12 @@ export async function runSetupWizard(): Promise<string> {
   return apiKey;
 }
 
-function writeConfigToFile(filePath: string, config: Record<string, string>): void {
+async function writeConfigToFile(filePath: string, config: Record<string, string>): Promise<void> {
   let content = '';
-  if (fs.existsSync(filePath)) {
-    content = fs.readFileSync(filePath, 'utf-8');
-  }
+  try {
+    await fsp.access(filePath);
+    content = await fsp.readFile(filePath, 'utf-8');
+  } catch {}
 
   const lines = content.split('\n');
   const updatedKeys = new Set<string>();
@@ -270,5 +271,5 @@ function writeConfigToFile(filePath: string, config: Record<string, string>): vo
     }
   }
 
-  fs.writeFileSync(filePath, lines.join('\n').trim() + '\n', 'utf-8');
+  await fsp.writeFile(filePath, lines.join('\n').trim() + '\n', 'utf-8');
 }
