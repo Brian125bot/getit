@@ -106,18 +106,18 @@ test('Functionality Test Suite: Stateful CWD Tracker', async (t) => {
     assert.ok(path.isAbsolute(getActiveCwd()));
   });
 
-  await t.test('should statefully alter active Cwd when directory exists', () => {
+  await t.test('should statefully alter active Cwd when directory exists', async () => {
     const tempDir = os.tmpdir();
-    setActiveCwd(tempDir);
+    await setActiveCwd(tempDir);
     assert.strictEqual(getActiveCwd(), path.resolve(tempDir));
     // Restore
-    setActiveCwd(originalCwd);
+    await setActiveCwd(originalCwd);
   });
 
-  await t.test('should throw an error when target directory does not exist', () => {
-    assert.throws(() => {
-      setActiveCwd('/non-existent/directory/path/for/getit/test');
-    });
+  await t.test('should throw an error when target directory does not exist', async () => {
+    await assert.rejects(async () => {
+      await setActiveCwd('/non-existent/directory/path/for/getit/test');
+    }, /does not exist/);
   });
 });
 
