@@ -15,7 +15,7 @@ export interface DriftResult {
   files: FileDriftStatus[];
 }
 
-const HASH_BATCH_SIZE = 32;
+const HASH_BATCH_SIZE = 5;
 
 async function evaluateTrackedEntry(
   workspaceRoot: string,
@@ -87,19 +87,31 @@ export async function detectWorkspaceDrift(workspaceRoot: string): Promise<Drift
   const profileCandidates = await collectProfileCandidatePaths(workspaceRoot, manifest.fingerprint);
   const allCandidates = [...CONFIG_CANDIDATES, ...profileCandidates];
 
-  for (const candidate of allCandidates) {
-    if (manifest.trackedPaths[candidate]) {
-      continue;
-    }
-    const liveFile = path.join(workspaceRoot, candidate);
-    try {
-      const stat = await fsp.stat(liveFile);
-      if (stat.isFile()) {
-        result.push({ path: candidate, status: 'untracked' });
+  for (let i = 0; i < allCandidates.length; i += HASH_BATCH_SIZE) {
+    const batch = allCandidates.slice(i, i + HASH_BATCH_SIZE);
+    const batchResults = await Promise.all(
+      batch.map(async (candidate) => {
+        if (manifest.trackedPaths[candidate]) {
+          return null;
+        }
+        const liveFile = path.join(workspaceRoot, candidate);
+        try {
+          const stat = await fsp.stat(liveFile);
+          if (stat.isFile()) {
+            return { path: candidate, status: 'untracked' as const };
+          }
+        } catch {
+          // skip inaccessible candidates
+        }
+        return null;
+      })
+    );
+
+    for (const fileStatus of batchResults) {
+      if (fileStatus) {
+        result.push(fileStatus);
         hasDrift = true;
       }
-    } catch {
-      // skip inaccessible candidates
     }
   }
 

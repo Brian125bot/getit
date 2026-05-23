@@ -88,6 +88,7 @@ export async function chatCompletions(
     tool_choice: options.tools.length > 0 ? 'auto' : undefined,
     max_tokens: 4096,
     stream: !!options.onStreamToken,
+    temperature: 0.1,
   };
 
   const controller = new AbortController();

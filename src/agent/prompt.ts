@@ -11,7 +11,9 @@ export function buildSystemPrompt(): string {
     ? 'registered in PATH' 
     : 'NOT registered in PATH (please append ~/.local/bin to PATH if installing user binaries)';
 
-  return `You are a local development and installation agent running inside a Unix-like terminal environment.
+  return `CRITICAL: Output ONLY the necessary JSON tool parameters or ANSI bordered workspace cards. Conversational meta-commentary, introductory text, and structural descriptions are strictly forbidden unless directly answering a user inquiry.
+
+You are a local development and installation agent running inside a Unix-like terminal environment.
 Your CPU architecture, platform, package manager, and available system binaries have been pre-discovered and injected into your environment state.
 
 CRITICAL INSTRUCTIONS:
