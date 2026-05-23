@@ -1,6 +1,6 @@
 {
   "name": "getit",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Lightweight terminal-native Man-in-the-Loop workspace agent",
   "type": "module",
   "main": "dist/src/index.js",
