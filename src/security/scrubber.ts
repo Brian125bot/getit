@@ -61,8 +61,38 @@ function looksLikeSecretByEntropy(value: string): boolean {
   return entropy > 4.8 && /[A-Za-z]/.test(value) && /\d/.test(value);
 }
 
+const SECURITY_PREFIXES = ['sk-', 'ghp_', 'Bearer ', 'github_pat_', 'AWS_', '-----BEGIN'];
+
 export function scrubText(text: string, session: MaskingSession = defaultSession): string {
-  if (!text) return text;
+  if (!text || text.length < 32) return text;
+
+  let hasPotentialSecret = false;
+
+  // Keyword check
+  for (const prefix of SECURITY_PREFIXES) {
+    if (text.includes(prefix)) {
+      hasPotentialSecret = true;
+      break;
+    }
+  }
+
+  // Entropy check (only if text is long enough to contain high-entropy secrets)
+  if (!hasPotentialSecret) {
+    if (/\S{33,}/.test(text)) {
+      hasPotentialSecret = true;
+    }
+  }
+
+  if (!hasPotentialSecret) {
+    let hasKnown = false;
+    for (const secret of knownSecrets) {
+      if (text.includes(secret)) {
+        hasKnown = true;
+        break;
+      }
+    }
+    if (!hasKnown) return text;
+  }
 
   let scrubbed = text;
 
