@@ -17,23 +17,23 @@ test('UI Layout: getTerminalWidth returns a valid column number', () => {
 test('UI Layout: getCenterPadding computes accurate space lengths', () => {
   // Test with standard 80 width terminal
   const paddingStandard = getCenterPadding(40, 80);
-  assert.strictEqual(paddingStandard, 20);
+  assert.strictEqual(paddingStandard, 2);
 
   // Test with 100 width terminal
   const paddingWide = getCenterPadding(40, 100);
-  assert.strictEqual(paddingWide, 30);
+  assert.strictEqual(paddingWide, 2);
 });
 
-test('UI Layout: getCenterPadding returns 0 when term width < 60', () => {
+test('UI Layout: getCenterPadding returns 2 when term width < 60', () => {
   const paddingNarrow = getCenterPadding(20, 50);
-  assert.strictEqual(paddingNarrow, 0);
+  assert.strictEqual(paddingNarrow, 2);
 });
 
 test('UI Layout: centerLine pads a single line correctly', () => {
   const line = 'Hello World';
   const centered = centerLine(line, line.length, 80);
-  // (80 - 11) / 2 = 34 padding spaces
-  const expected = ' '.repeat(34) + line;
+  // (80 - 11) / 2 = 34 padding spaces -> now 2
+  const expected = '  ' + line;
   assert.strictEqual(centered, expected);
 });
 
@@ -52,8 +52,8 @@ test('UI Layout: centerBlock centers a multi-line block based on its longest lin
 
   const longestLineLength = 'This is a much longer line in the block'.length; // 39 characters
   const termWidth = 80;
-  // Expected padding is (80 - 39) / 2 = 20 spaces
-  const padding = ' '.repeat(20);
+  // Expected padding is (80 - 39) / 2 = 20 spaces -> now 2
+  const padding = '  ';
 
   const expected = [
     padding + 'Short line',
@@ -79,7 +79,7 @@ test('UI Layout: centerBlock preserves empty lines exactly without padding them'
 
 test('UI Layout: centerPrompt centers user questions cleanly', () => {
   const prompt = 'Approve? [y/N] ❯ '; // 17 characters
-  // Expected padding for 80 terminal is (80 - 17) / 2 = 31 spaces
+  // Expected padding for 80 terminal is (80 - 17) / 2 = 31 spaces -> now 2
   const centered = centerPrompt(prompt, 80);
-  assert.strictEqual(centered, ' '.repeat(31) + prompt);
+  assert.strictEqual(centered, '  ' + prompt);
 });

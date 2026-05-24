@@ -2,7 +2,7 @@ import { sendChatRequest, ChatMessage } from './client.js';
 import { toolSchemas } from './tools.js';
 import { dispatchToolCall } from '../tools/registry.js';
 import { getRuntimeSession, startPromptTransaction } from '../runtime/session.js';
-import { scrubText } from '../security/scrubber.js';
+import { scrubText, StreamScrubber } from '../security/scrubber.js';
 import { loadConfig } from '../security/secrets-loader.js';
 import { resolveActivePreset } from '../carriers/registry.js';
 import { TerminalSpinner } from '../ui/spinner.js';
@@ -83,6 +83,7 @@ export class AgentLoop {
       let firstToken = true;
       try {
         const session = getRuntimeSession();
+        const scrubber = new StreamScrubber(session.maskingSession);
         
         const response = await sendChatRequest(
           this.messages,
@@ -93,10 +94,17 @@ export class AgentLoop {
               process.stdout.write('\x1b[32mgetit-assistant ❯ \x1b[0m');
               firstToken = false;
             }
-            const safeToken = scrubText(token, session.maskingSession);
-            process.stdout.write(safeToken);
+            const safeChunk = scrubber.push(token);
+            if (safeChunk) {
+              process.stdout.write(safeChunk);
+            }
           }
         );
+        
+        const finalChunk = scrubber.flush();
+        if (finalChunk) {
+          process.stdout.write(finalChunk);
+        }
         
         if (firstToken) {
           spinner.succeed();

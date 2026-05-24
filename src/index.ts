@@ -30,6 +30,7 @@ import { getDriftAdvice } from './workspace/drift-advisor.js';
 import { WorkspaceHistoryManager } from './workspace/history.js';
 import { WorkspaceRollbackManager } from './workspace/rollback.js';
 import { exportScrubbedWorkspace } from './workspace/export.js';
+import { checkForUpdates, performUpdate } from './update.js';
 
 // Dynamic version loader resolving relative to both source and compiled dist paths
 function getVersion(): string {
@@ -63,15 +64,13 @@ async function renderAdvisorCard(filePath: string, scrubbedContent: string, diff
   const mid = `\x1b[1;35m╟${'─'.repeat(width - 2)}╢\x1b[0m`;
   const bot = `\x1b[1;35m╚${'═'.repeat(width - 2)}╝\x1b[0m`;
 
-  const padCenter = (text: string, w: number): string => {
+  const padRight = (text: string, w: number): string => {
     const visible = stripAnsi(text).length;
-    const padding = Math.floor((w - visible) / 2);
-    const left = ' '.repeat(Math.max(0, padding));
-    const right = ' '.repeat(Math.max(0, w - visible - padding));
-    return left + text + right;
+    const right = ' '.repeat(Math.max(0, w - visible));
+    return text + right;
   };
 
-  const title = `\x1b[1;35m║\x1b[1;33m${padCenter('🤖 AI DRIFT ADVISORY', width - 2)}\x1b[1;35m║\x1b[0m`;
+  const title = `\x1b[1;35m║\x1b[1;33m${padRight('🤖 AI DRIFT ADVISORY', width - 2)}\x1b[1;35m║\x1b[0m`;
   
   const adviceLines = advice.split('\n').filter(Boolean);
   const formattedLines: string[] = [];
@@ -435,6 +434,12 @@ async function bootstrap() {
   }
 
   const welcomeLines: string[] = [];
+  welcomeLines.push(`\x1b[1;32m  ____      _   ___ _   \x1b[0m`);
+  welcomeLines.push(`\x1b[1;32m / ___| ___| |_|_ _| |_ \x1b[0m`);
+  welcomeLines.push(`\x1b[1;32m| |  _ / _ \\ __|| || __|\x1b[0m`);
+  welcomeLines.push(`\x1b[1;32m| |_| |  __/ |_ | || |_ \x1b[0m`);
+  welcomeLines.push(`\x1b[1;32m \\____|\\___|\\__|___|\\__|\x1b[0m`);
+  welcomeLines.push(``);
   welcomeLines.push(`┌────────────────────────────────────────────────────────┐`);
   welcomeLines.push(`│ \x1b[1;32mGETIT WORKSPACE AGENT v${getVersion().padEnd(10)}\x1b[1;36m                         │`);
   welcomeLines.push(`├────────────────────────────────────────────────────────┤`);
@@ -453,6 +458,13 @@ async function bootstrap() {
   
   const pathStatus = env.localBinInPath ? 'Registered ✓' : 'NOT in PATH ✗';
   welcomeLines.push(`│ \x1b[1;37m~/.local/bin:\x1b[0m  ${pathStatus.padEnd(40)} \x1b[1;36m│`);
+
+  const updateAvailable = await checkForUpdates();
+  if (updateAvailable) {
+    welcomeLines.push(`├────────────────────────────────────────────────────────┤`);
+    welcomeLines.push(`│ \x1b[1;33m[!] Update Available! Run /update to install.\x1b[1;36m          │`);
+  }
+
   welcomeLines.push(`└────────────────────────────────────────────────────────┘`);
 
   console.log('\n' + centerBlock(welcomeLines.join('\n')));
@@ -524,6 +536,15 @@ async function handleSlashCommand(input: string, agent: AgentLoop, systemPrompt:
     case '/setup':
       await runSetupWizard();
       return;
+    case '/update': {
+      try {
+        await performUpdate();
+        console.log(`\n\x1b[32m✓ Update completed successfully. Please restart getit.\x1b[0m\n`);
+      } catch (err: any) {
+        console.error(`\x1b[31m  Update Error: ${err.message}\x1b[0m`);
+      }
+      return 'exit';
+    }
     case '/undo':
       await runUndoCommand();
       return;
@@ -754,13 +775,13 @@ function printConfigCard(): void {
   const mid = `\x1b[1;36m╟${'─'.repeat(width - 2)}╢\x1b[0m`;
   const bot = `\x1b[1;36m╚${'═'.repeat(width - 2)}╝\x1b[0m`;
 
-  const padCenter = (text: string, w: number): string => {
+  const padRight = (text: string, w: number): string => {
     const visible = stripAnsi(text).length;
-    const padding = Math.floor((w - visible) / 2);
-    return ' '.repeat(Math.max(0, padding)) + text + ' '.repeat(Math.max(0, w - visible - padding));
+    const right = ' '.repeat(Math.max(0, w - visible));
+    return text + right;
   };
 
-  const title = `\x1b[1;36m║\x1b[1;33m${padCenter('CURRENT RUNTIME OPTIONS', width - 2)}\x1b[1;36m║\x1b[0m`;
+  const title = `\x1b[1;36m║\x1b[1;33m${padRight('CURRENT RUNTIME OPTIONS', width - 2)}\x1b[1;36m║\x1b[0m`;
   const formattedLines = configCardLines.map((line) => {
     const visibleLength = stripAnsi(line).length;
     const padRight = Math.max(0, (width - 6) - visibleLength);

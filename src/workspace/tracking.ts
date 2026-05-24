@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 const execFile = promisify(execFileCb);
 import { scrubText, MaskingSession } from '../security/scrubber.js';
 import { resolveLiveFilePath } from './profiles.js';
+import { atomicWriteFile } from './fs-utils.js';
 
 /**
  * Resolves the tracking repository root directory and ensures it is initialized as a Git repository.
@@ -62,7 +63,7 @@ export async function stageToTracking(workspaceRoot: string, relativePath: strin
 
   // Ensure target directory exists in tracking repo
   await fsp.mkdir(path.dirname(targetFile), { recursive: true });
-  await fsp.writeFile(targetFile, scrubbed, 'utf-8');
+  await atomicWriteFile(targetFile, scrubbed);
 
   // Sync permissions
   const stat = await fsp.stat(liveFile);

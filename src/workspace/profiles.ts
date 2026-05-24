@@ -1,5 +1,6 @@
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
+import { atomicWriteFile } from './fs-utils.js';
 
 export const COMMON_DIR = 'common';
 export const PROFILES_DIR = 'profiles';
@@ -18,19 +19,17 @@ export async function ensureProfileLayout(workspaceRoot: string, fingerprint: st
 
   const readme = path.join(commonPath, 'README.md');
   try { await fsp.access(readme); } catch {
-    await fsp.writeFile(
+    await atomicWriteFile(
       readme,
-      '# getit common profile\n\nPlace shared configuration files here. They apply to all machines.\n',
-      'utf-8'
+      '# getit common profile\n\nPlace shared configuration files here. They apply to all machines.\n'
     );
   }
 
   const profileReadme = path.join(profilePath, 'README.md');
   try { await fsp.access(profileReadme); } catch {
-    await fsp.writeFile(
+    await atomicWriteFile(
       profileReadme,
-      `# getit machine profile (${fingerprint.slice(0, 8)}…)\n\nMachine-specific overrides for this host fingerprint.\n`,
-      'utf-8'
+      `# getit machine profile (${fingerprint.slice(0, 8)}…)\n\nMachine-specific overrides for this host fingerprint.\n`
     );
   }
 }

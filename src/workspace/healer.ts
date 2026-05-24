@@ -1,10 +1,10 @@
-import * as fs from 'node:fs';
+import * as fsp from 'node:fs/promises';
 import { discoverEnvironment } from '../discovery/environment.js';
 
 export interface HealingRule {
   name: string;
   pattern: RegExp;
-  getFixCommand: (match: string[], packageManager: string, platform: string) => string;
+  getFixCommand: (match: string[], packageManager: string, platform: string) => Promise<string> | string;
   description: string;
 }
 
@@ -51,9 +51,14 @@ const HEALING_RULES: HealingRule[] = [
   {
     name: 'Missing Node module',
     pattern: /Error: Cannot find module '(\S+)'/i,
-    getFixCommand: (match, pkgMgr, platform) => {
+    getFixCommand: async (match, pkgMgr, platform) => {
       const moduleName = match[1];
-      if (fs.existsSync('package.json')) {
+      let hasPackageJson = false;
+      try {
+        await fsp.access('package.json');
+        hasPackageJson = true;
+      } catch {}
+      if (hasPackageJson) {
         return `npm install ${moduleName}`;
       }
       return `npm install -g ${moduleName}`;
@@ -66,7 +71,7 @@ const HEALING_RULES: HealingRule[] = [
  * Scans stderr for common dependency/binary errors and returns a deterministic
  * remediation command mapped to the host's package manager.
  */
-export function attemptDependencyHealing(stderr: string): { matched: boolean; command?: string; description?: string } {
+export async function attemptDependencyHealing(stderr: string): Promise<{ matched: boolean; command?: string; description?: string }> {
   const env = discoverEnvironment();
   const pkgMgr = env.primaryPackageManager;
   const platform = env.targetPlatform;
@@ -74,7 +79,7 @@ export function attemptDependencyHealing(stderr: string): { matched: boolean; co
   for (const rule of HEALING_RULES) {
     const match = rule.pattern.exec(stderr);
     if (match) {
-      const cmd = rule.getFixCommand(match, pkgMgr, platform);
+      const cmd = await rule.getFixCommand(match, pkgMgr, platform);
       return {
         matched: true,
         command: cmd,

@@ -126,3 +126,40 @@ export function scrubText(text: string, session: MaskingSession = defaultSession
 
   return scrubbed;
 }
+
+export class StreamScrubber {
+  private buffer = '';
+  private session: MaskingSession;
+
+  constructor(session: MaskingSession = defaultSession) {
+    this.session = session;
+  }
+
+  push(token: string): string {
+    this.buffer += token;
+    
+    const boundaryMatch = this.buffer.match(/[\s\n](?=[^\s\n]*$)/);
+    
+    if (boundaryMatch && boundaryMatch.index !== undefined) {
+      const boundaryIdx = boundaryMatch.index + 1;
+      const chunkToFlush = this.buffer.substring(0, boundaryIdx);
+      this.buffer = this.buffer.substring(boundaryIdx);
+      return scrubText(chunkToFlush, this.session);
+    }
+    
+    if (this.buffer.length > 200) {
+       const chunkToFlush = this.buffer.substring(0, this.buffer.length - 100);
+       this.buffer = this.buffer.substring(this.buffer.length - 100);
+       return scrubText(chunkToFlush, this.session);
+    }
+
+    return '';
+  }
+
+  flush(): string {
+    const remaining = this.buffer;
+    this.buffer = '';
+    return scrubText(remaining, this.session);
+  }
+}
+

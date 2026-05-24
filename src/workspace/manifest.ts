@@ -5,6 +5,7 @@ import * as os from 'node:os';
 import { discoverEnvironment } from '../discovery/environment.js';
 import { scrubText, MaskingSession } from '../security/scrubber.js';
 import { ensureProfileLayout, collectProfileCandidatePaths } from './profiles.js';
+import { atomicWriteFile } from './fs-utils.js';
 
 export interface TrackedPathMetadata {
   hash: string;
@@ -87,7 +88,7 @@ export async function initWorkspaceManifest(rootPath: string): Promise<Workspace
   }
 
   const manifestPath = path.join(rootPath, MANIFEST_FILENAME);
-  await fsp.writeFile(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
+  await atomicWriteFile(manifestPath, JSON.stringify(manifest, null, 2));
   
   return manifest;
 }
@@ -104,5 +105,5 @@ export async function loadWorkspaceManifest(rootPath: string): Promise<Workspace
 
 export async function saveWorkspaceManifest(rootPath: string, manifest: WorkspaceManifest): Promise<void> {
   const manifestPath = path.join(rootPath, MANIFEST_FILENAME);
-  await fsp.writeFile(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
+  await atomicWriteFile(manifestPath, JSON.stringify(manifest, null, 2));
 }

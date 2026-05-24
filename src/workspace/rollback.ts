@@ -10,6 +10,7 @@ import { loadWorkspaceManifest, saveWorkspaceManifest, computeScrubbedHash } fro
 import { generateDiffPreview } from '../tools/diff.js';
 import { getReadlineInterface } from '../mitl/interceptor.js';
 import { centerBlock, centerLine, centerPrompt, stripAnsi } from '../ui/layout.js';
+import { atomicWriteFile } from './fs-utils.js';
 
 export function isValidCommitHash(hash: string): boolean {
   return /^[a-f0-9]{7,64}$/i.test(hash);
@@ -233,7 +234,7 @@ export class WorkspaceRollbackManager {
       if (contentAtCommit !== null) {
         // Overwrite live workspace file
         await fsp.mkdir(path.dirname(file), { recursive: true });
-        await fsp.writeFile(file, contentAtCommit, 'utf-8');
+        await atomicWriteFile(file, contentAtCommit);
         if (modeAtCommit !== null) {
           await fsp.chmod(file, modeAtCommit);
         }
@@ -249,7 +250,7 @@ export class WorkspaceRollbackManager {
         // Write directly to shadow tracking repo
         const shadowFile = path.join(trackingRoot, relativePath);
         await fsp.mkdir(path.dirname(shadowFile), { recursive: true });
-        await fsp.writeFile(shadowFile, contentAtCommit, 'utf-8');
+        await atomicWriteFile(shadowFile, contentAtCommit);
         if (modeAtCommit !== null) {
           await fsp.chmod(shadowFile, modeAtCommit);
         }

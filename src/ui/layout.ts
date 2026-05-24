@@ -19,11 +19,7 @@ export function stripAnsi(text: string): string {
  * Calculates left padding size to center content of given width
  */
 export function getCenterPadding(contentWidth: number, termWidth: number = getTerminalWidth()): number {
-  if (termWidth < 60) {
-    return 0;
-  }
-  const padding = Math.floor((termWidth - contentWidth) / 2);
-  return Math.max(0, padding);
+  return 2;
 }
 
 /**

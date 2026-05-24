@@ -1,4 +1,6 @@
-import { execSync } from 'node:child_process';
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
+const execFile = promisify(execFileCb);
 import { getTrackingRoot } from './tracking.js';
 import { stripAnsi, centerBlock, getBoxChars, getTerminalWidth } from '../ui/layout.js';
 
@@ -16,10 +18,9 @@ export class WorkspaceHistoryManager {
   static async getHistory(): Promise<CommitRecord[]> {
     const trackingRoot = await getTrackingRoot();
     try {
-      const output = execSync('git log --pretty=format:"%H||__DELIM__||%an||__DELIM__||%ad||__DELIM__||%s" --date=short', {
+      const { stdout: output } = await execFile('git', ['log', '--pretty=format:%H||__DELIM__||%an||__DELIM__||%ad||__DELIM__||%s', '--date=short'], {
         cwd: trackingRoot,
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'ignore']
+        encoding: 'utf-8'
       });
       if (!output.trim()) return [];
       return output.trim().split('\n').map(line => {

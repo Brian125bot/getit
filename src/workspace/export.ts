@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import { loadWorkspaceManifest } from './manifest.js';
 import { scrubContentGeneric } from './tracking.js';
 import { resolveLiveFilePath } from './profiles.js';
+import { atomicWriteFile } from './fs-utils.js';
 
 export interface ExportResult {
   outputDir: string;
@@ -44,7 +45,7 @@ export async function exportScrubbedWorkspace(
     const targetPath = path.join(resolvedOut, relPath);
 
     await fsp.mkdir(path.dirname(targetPath), { recursive: true });
-    await fsp.writeFile(targetPath, scrubbed, 'utf-8');
+    await atomicWriteFile(targetPath, scrubbed);
     await fsp.chmod(targetPath, stat.mode);
     filesExported.push(relPath);
   }
@@ -55,10 +56,9 @@ export async function exportScrubbedWorkspace(
     fileCount: filesExported.length,
     paths: filesExported
   };
-  await fsp.writeFile(
+  await atomicWriteFile(
     path.join(resolvedOut, 'export-manifest.json'),
-    JSON.stringify(manifestCopy, null, 2),
-    'utf-8'
+    JSON.stringify(manifestCopy, null, 2)
   );
 
   return { outputDir: resolvedOut, filesExported };

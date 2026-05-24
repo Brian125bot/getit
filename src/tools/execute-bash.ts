@@ -157,7 +157,7 @@ export async function executeBash(command: string, workingDirectory?: string): P
   }
 
   // Intercept failure for dependency healing
-  const healing = attemptDependencyHealing(result.stderr || result.error || '');
+  const healing = await attemptDependencyHealing(result.stderr || result.error || '');
   if (healing.matched && healing.command) {
     console.log(`\n\x1b[35m❯ Dependency/Execution Failure Mapped: ${healing.description}\x1b[0m`);
     console.log(`\x1b[35m❯ Mapped Remediation: ${healing.command}\x1b[0m`);
