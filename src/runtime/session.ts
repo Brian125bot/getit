@@ -1,3 +1,9 @@
+/**
+ * @module runtime/session
+ * @description Global runtime session state for getit.
+ *
+ * v2.0: Extended with watch mode, vault, and recipe state fields.
+ */
 import { randomUUID } from 'node:crypto';
 import { MaskingSession } from '../security/scrubber.js';
 import { PlanQueue } from '../planning/plan-queue.js';
@@ -15,6 +21,11 @@ export interface RuntimeSession {
   mitlActive: boolean;
   processActive: boolean;
   suppressMitl: boolean;
+  // v2.0 additions
+  watchActive: boolean;
+  vaultUnlocked: boolean;
+  recipeRecording: boolean;
+  activeRecipe: string | null;
 }
 
 let session: RuntimeSession = createRuntimeSession();
@@ -31,6 +42,11 @@ export function createRuntimeSession(overrides: Partial<RuntimeSession> = {}): R
     mitlActive: false,
     processActive: false,
     suppressMitl: false,
+    // v2.0 defaults
+    watchActive: false,
+    vaultUnlocked: false,
+    recipeRecording: false,
+    activeRecipe: null,
     ...overrides
   };
 }
