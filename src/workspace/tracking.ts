@@ -1,3 +1,26 @@
+/**
+ * @module tracking
+ * @description Shadow Git repository management for getit's file-tracking layer.
+ *
+ * getit maintains a private "tracking repository" in `~/.local/state/getit/tracking/`
+ * that mirrors the content of any files the user explicitly tracks. This shadow
+ * repository is a real Git repo, allowing `history`, `rollback`, and `export`
+ * commands to leverage Git's storage and diffing primitives without polluting
+ * the user's own project repositories.
+ *
+ * Key functions:
+ *   - `getTrackingRoot()`      — Resolves and initialises the shadow repo path.
+ *   - `stageToTracking()`      — Scrubs, writes, and `git add`s a file to the shadow repo.
+ *   - `inspectTrackedFile()`   — Returns the current scrubbed content of a tracked file.
+ *   - `scrubContentGeneric()`  — Convenience wrapper for scrubbing arbitrary content
+ *                                 without staging it.
+ *
+ * All content written to the tracking repo is scrubbed through `scrubText()` so
+ * that the shadow history never contains raw API keys or other secrets, even if
+ * the user accidentally includes them in a tracked source file.
+ *
+ * @see {@link https://github.com/Brian125bot/getit} for full documentation.
+ */
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';

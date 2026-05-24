@@ -1,6 +1,6 @@
 {
   "name": "getit",
-  "version": "1.0.1",
+  "version": "1.5.0",
   "description": "Lightweight terminal-native Man-in-the-Loop workspace agent",
   "type": "module",
   "main": "dist/src/index.js",
@@ -14,7 +14,8 @@
   "files": [
     "dist/",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build": "tsc && chmod +x dist/index.js dist/src/index.js",
@@ -31,15 +32,21 @@
     "cli",
     "openrouter",
     "security",
-    "man-in-the-loop"
+    "man-in-the-loop",
+    "mitl",
+    "ai",
+    "automation"
   ],
-  "author": "CreeTacticalGenius",
+  "author": "Brian Laposa <creetacticalgenius@gmail.com>",
   "license": "ISC",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/creetacticalgenius/getit.git"
+    "url": "git+https://github.com/Brian125bot/getit.git"
   },
-  "homepage": "https://github.com/creetacticalgenius/getit#readme",
+  "bugs": {
+    "url": "https://github.com/Brian125bot/getit/issues"
+  },
+  "homepage": "https://github.com/Brian125bot/getit#readme",
   "devDependencies": {
     "@types/node": "^20.11.0",
     "typescript": "^5.3.3"

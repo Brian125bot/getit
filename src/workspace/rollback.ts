@@ -1,3 +1,26 @@
+/**
+ * @module rollback
+ * @description Workspace rollback system — preview and apply shadow-repo commits
+ * to the live workspace.
+ *
+ * `WorkspaceRollbackManager` exposes two public methods:
+ *
+ * - `previewRollback(commitHash, filePath?)` — Generates a human-readable
+ *   unified diff showing what would change if the specified shadow commit were
+ *   applied to the current workspace. Does not modify any files.
+ *
+ * - `applyRollback(commitHash, filePath?)` — Applies the changes from the
+ *   shadow commit to the live workspace after an interactive confirmation prompt.
+ *   Each file is restored atomically (temp-file + rename). The manifest is
+ *   updated and affected files are re-staged to the tracking repo so the
+ *   rollback itself is recorded in the shadow history.
+ *
+ * All paths are validated through `assertPathAllowed()` from the security layer
+ * before any file is read or written. Commit hashes are validated against
+ * `/^[a-f0-9]{7,64}$/i` to prevent shell injection via crafted hash strings.
+ *
+ * @see {@link https://github.com/Brian125bot/getit} for full documentation.
+ */
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';

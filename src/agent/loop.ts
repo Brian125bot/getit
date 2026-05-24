@@ -1,3 +1,27 @@
+/**
+ * @module loop
+ * @description Core multi-turn agent execution loop for getit.
+ *
+ * `AgentLoop` drives the conversation between the user, the LLM, and the MITL
+ * (Man-in-the-Loop) approval gate. Each call to `runTurn()` appends the user
+ * message to the conversation history, sends the history to the active carrier,
+ * and then iterates over any tool calls the model requests — each of which is
+ * intercepted by `src/mitl/interceptor.ts` for human approval before execution.
+ *
+ * ### Safety mechanisms built into this loop
+ * - **Runaway execution guard:** A maximum of 10 tool-call iterations per turn
+ *   prevents infinite agent loops from consuming tokens or causing system damage.
+ * - **Halt propagation:** Any tool execution that returns a `halt` signal
+ *   immediately stops the iteration and returns control to the user.
+ * - **History pruning:** Conversation history is automatically capped at 25
+ *   messages (plus the system prompt) to prevent context-window overflow on
+ *   long sessions. System prompt is always preserved.
+ * - **Streaming scrubber:** All tokens streamed to stdout pass through
+ *   `StreamScrubber` before they are written to the terminal, ensuring no
+ *   high-entropy secrets leak in model-generated markdown.
+ *
+ * @see {@link https://github.com/Brian125bot/getit} for full documentation.
+ */
 import { sendChatRequest, ChatMessage } from './client.js';
 import { toolSchemas } from './tools.js';
 import { dispatchToolCall } from '../tools/registry.js';
@@ -7,6 +31,17 @@ import { loadConfig } from '../security/secrets-loader.js';
 import { resolveActivePreset } from '../carriers/registry.js';
 import { TerminalSpinner } from '../ui/spinner.js';
 
+/**
+ * Orchestrates multi-turn LLM conversations with MITL tool-call interception.
+ *
+ * One `AgentLoop` instance is created per REPL session and shared across all
+ * user turns so that conversation history accumulates naturally. Call
+ * `resetSession()` to clear history while preserving the system prompt.
+ *
+ * @example
+ * const loop = new AgentLoop(systemPromptText);
+ * await loop.runTurn('install ripgrep');
+ */
 export class AgentLoop {
   private messages: ChatMessage[] = [];
 

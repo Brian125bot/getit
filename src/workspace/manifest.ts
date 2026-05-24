@@ -1,3 +1,26 @@
+/**
+ * @module manifest
+ * @description Workspace manifest management — initialization, loading, saving,
+ * and SHA-256 content hashing for drift detection.
+ *
+ * The manifest (`.getit-manifest.json` in the workspace root) is getit's
+ * authoritative record of which files are being tracked and what their last
+ * known state was. It is the foundation of the drift-detection system:
+ *
+ * - On `manifest init`, getit fingerprints the platform, discovers config-file
+ *   candidates (package.json, Cargo.toml, *.config.*, etc.), and writes the
+ *   manifest to disk.
+ * - On every subsequent run, `detectWorkspaceDrift()` compares current file
+ *   hashes against the stored hashes and reports added, modified, or deleted
+ *   files.
+ * - All file content stored in the manifest is run through the scrubber before
+ *   hashing so that secret values never appear in the manifest or in diff output.
+ *
+ * The manifest is written atomically (UUID temp-file + rename) to prevent
+ * partial-write corruption if getit is interrupted mid-save.
+ *
+ * @see {@link https://github.com/Brian125bot/getit} for full documentation.
+ */
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
