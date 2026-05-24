@@ -1,3 +1,20 @@
+/**
+ * @module history
+ * @description Shadow-repository commit history viewer for getit.
+ *
+ * `WorkspaceHistoryManager` reads the Git log from the shadow tracking
+ * repository and renders it as a formatted terminal card.
+ *
+ * The history reflects every `stageToTracking()` call that ended with a
+ * `git commit` — i.e., every time the user approved a file-write action and
+ * getit staged the scrubbed content. This gives users an auditable, time-ordered
+ * record of all changes getit has made to tracked files.
+ *
+ * Render output is ANSI-coloured and centred for display in the REPL via the
+ * `/history` slash command or the `getit history` CLI sub-command.
+ *
+ * @see {@link https://github.com/Brian125bot/getit} for full documentation.
+ */
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 const execFile = promisify(execFileCb);
