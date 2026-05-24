@@ -20,16 +20,25 @@
  *   `StreamScrubber` before they are written to the terminal, ensuring no
  *   high-entropy secrets leak in model-generated markdown.
  *
+ * ### v2.0 additions
+ * - **Dynamic tool schemas:** Uses `getToolSchemas()` to merge built-in + plugin tools.
+ * - **Session memory injection:** Appends session/project/preference context to turns.
+ * - **Recipe recording:** When recording is active, dispatched tool calls are captured.
+ *
  * @see {@link https://github.com/Brian125bot/getit} for full documentation.
  */
 import { sendChatRequest, ChatMessage } from './client.js';
-import { toolSchemas } from './tools.js';
+import { getToolSchemas } from './tools.js';
 import { dispatchToolCall } from '../tools/registry.js';
 import { getRuntimeSession, startPromptTransaction } from '../runtime/session.js';
 import { scrubText, StreamScrubber } from '../security/scrubber.js';
 import { loadConfig } from '../security/secrets-loader.js';
 import { resolveActivePreset } from '../carriers/registry.js';
 import { TerminalSpinner } from '../ui/spinner.js';
+import { buildSessionContext, appendSessionEntry } from '../memory/sessions.js';
+import { buildProjectContext } from '../memory/projects.js';
+import { buildPreferencesContext } from '../memory/preferences.js';
+import { isRecording, recordStep } from '../recipes/recorder.js';
 
 /**
  * Orchestrates multi-turn LLM conversations with MITL tool-call interception.
@@ -89,6 +98,31 @@ export class AgentLoop {
     this.messages = [systemPrompt, ...pruned];
   }
 
+  /**
+   * Build memory context to inject into the system prompt or as a hidden user message.
+   * v2.0: combines session memory, project memory, and user preferences.
+   */
+  private buildMemoryContext(): string {
+    const parts: string[] = [];
+
+    try {
+      const sessionCtx = buildSessionContext();
+      if (sessionCtx) parts.push(sessionCtx);
+    } catch { /* memory may not be initialized */ }
+
+    try {
+      const projectCtx = buildProjectContext();
+      if (projectCtx) parts.push(projectCtx);
+    } catch { /* project detection may fail */ }
+
+    try {
+      const prefCtx = buildPreferencesContext();
+      if (prefCtx) parts.push(prefCtx);
+    } catch { /* prefs may not exist */ }
+
+    return parts.join('\n\n');
+  }
+
   public async runTurn(userInput: string): Promise<void> {
     startPromptTransaction();
 
@@ -99,6 +133,15 @@ export class AgentLoop {
       role: 'user',
       content: userInput
     });
+
+    // v2.0: Inject memory context as a system message before the turn
+    const memoryCtx = this.buildMemoryContext();
+    if (memoryCtx) {
+      this.messages.push({
+        role: 'system',
+        content: `[Memory Context]\n${memoryCtx}`
+      });
+    }
 
     let continueLoop = true;
     let iterationCount = 0;
@@ -114,6 +157,9 @@ export class AgentLoop {
       const preset = resolveActivePreset(config.carrier, config.baseUrl);
       const spinner = new TerminalSpinner(`Contacting ${preset.displayName}...`);
       spinner.start();
+
+      // v2.0: Use dynamic tool schemas (built-in + plugins)
+      const schemas = getToolSchemas();
       
       let firstToken = true;
       try {
@@ -122,7 +168,7 @@ export class AgentLoop {
         
         const response = await sendChatRequest(
           this.messages,
-          toolSchemas,
+          schemas,
           (token) => {
             if (firstToken) {
               spinner.succeed();
@@ -170,8 +216,24 @@ export class AgentLoop {
             }
 
             console.log(`\n\x1b[35m[getit] Dispatching Tool Call: ${name}\x1b[0m`);
+
+            // v2.0: Record step if recipe recording is active
+            if (isRecording()) {
+              recordStep(name, args, `Agent called ${name}`);
+            }
             
             const dispatchResult = await dispatchToolCall(name, args);
+
+            // v2.0: Record to session memory
+            try {
+              await appendSessionEntry({
+                type: 'tool_call',
+                tool: name,
+                args: { ...args, command: args.command?.slice(0, 200) },
+                success: !dispatchResult.haltTurn,
+                timestamp: new Date().toISOString()
+              });
+            } catch { /* session memory write is best-effort */ }
 
             // Append the tool execution result back to the history
             this.messages.push({
