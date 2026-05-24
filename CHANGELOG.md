@@ -10,10 +10,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [1.5.0] — 2026-05-24
 
 ### Summary
-Stabilization and documentation release. Cleans up all debug artifacts committed
-during the rapid v1.0 development sprint, hardens the entropy-based secret
-scrubber against false positives, fixes the npm registry metadata, and adds
-comprehensive JSDoc documentation across all public APIs.
+Stabilization, hardening, and comprehensive documentation release. Cleans up all
+debug artifacts committed during the rapid v1.0 development sprint, hardens the
+entropy-based secret scrubber against false positives, fixes the npm registry
+metadata, and adds JSDoc documentation across all public APIs. Introduces four
+new documentation files: ARCHITECTURE.md, API.md, SECURITY.md, and CONTRIBUTING.md.
 
 ### Fixed
 - **BUG-02 (HIGH):** Removed `build-errors.txt`, `build-errors2.txt`,
@@ -36,15 +37,82 @@ comprehensive JSDoc documentation across all public APIs.
     their purpose and calibration rationale.
 
 ### Added
+
+#### Documentation — New Files
+- **`ARCHITECTURE.md`:** Deep-dive technical architecture documentation covering:
+  - Six-layer system architecture diagram with data flow
+  - Complete module dependency graph
+  - Turn execution flow (step-by-step from user input to command execution)
+  - Workspace drift detection flow
+  - Three-layer secret scrubbing pipeline detail
+  - MaskingSession deterministic placeholder system
+  - Manifest lifecycle documentation
+  - Shadow tracking repository internals
+  - Carrier framework preset architecture
+  - Execution kernel async process lifecycle
+  - State management and transaction model
+  - Design decisions (zero deps, structured tool calling, fail-closed)
+- **`API.md`:** Complete public API reference for all 42 source files:
+  - Every exported function, class, interface, type, and constant
+  - Full TypeScript signatures with parameter tables
+  - Return types and structured response interfaces
+  - Organized by module: Agent, Carriers, Security, Tools, Execution,
+    MITL, Workspace, Backup, Planning, Runtime, Discovery, UI, Update
+- **`SECURITY.md`:** Comprehensive security model documentation covering:
+  - Threat model with severity classification
+  - Three-layer defense architecture
+  - MITL gate approval flow and guarantees
+  - Secret scrubbing layers (known-secret registry, pattern matching,
+    Shannon entropy analysis) with threshold tables
+  - False-positive prevention strategies (v1.5 improvements)
+  - Path policy engine (hardcoded bans, .getitignore, global policy)
+  - Absolute path enforcement and symlink resolution
+  - Input sanitization patterns (cascades, redirects, subshells)
+  - Environment isolation for child processes
+  - Fail-closed execution model with non-zero exit handling
+  - Workspace security (shadow tracking, rollback safety, export)
+  - Security profiles (strict, normal, override)
+  - Vulnerability reporting instructions
+- **`CONTRIBUTING.md`:** Contributor guide covering:
+  - Development setup and prerequisites
+  - Build commands reference
+  - Zero production dependencies constraint
+  - ESM module conventions (.js import extensions)
+  - File organization and module map
+  - Adding new tools and carriers (step-by-step)
+  - Testing guide (running, writing, categories, coverage)
+  - Code style guidelines (TypeScript, naming, security-sensitive code)
+  - Pull request guidelines and review process
+
+#### Documentation — Updated Files
+- **`README.md`:** Major overhaul for v1.5:
+  - Added version badge (v1.5.0)
+  - Added "Why getit?" comparison table (problem → solution)
+  - Expanded feature highlights with self-update
+  - Restructured Quick Start with clearer numbered steps
+  - Added "First Run" section with dashboard example updated to v1.5.0
+  - Added manual `.getitrc` configuration example with timeout
+  - Expanded MITL gate documentation with all four options (Y/n/e/c)
+  - Added carrier configuration table with default models per provider
+  - Added runtime carrier switching examples
+  - Expanded security architecture with guarantee table
+  - Added detailed test coverage table with test counts per suite
+  - Added single-test execution example
+  - Expanded project structure with per-file descriptions
+  - Added version history summary table
+  - Added cross-references to ARCHITECTURE.md, API.md, SECURITY.md,
+    CONTRIBUTING.md
+  - Updated copyright in License section
 - **`.gitignore` hardening:** Added `build-errors*.txt`, `fix-tests.cjs`,
   `*.debug.txt`, `*.error.txt` patterns so debug artifacts can never be
   accidentally committed again. Also added common editor (`.vscode/`, `.idea/`),
   OS (`.DS_Store`, `Thumbs.db`), and test-coverage (`coverage/`) exclusions.
-- **`CHANGELOG.md`:** This file — full version history starting from v1.0.
 - **`bugs` field in `package.json`:** Links npm consumers directly to the
   GitHub Issues page for bug reports.
 - **`CHANGELOG.md` in `package.json` `files` array:** Ensures the changelog is
   included in the published npm package.
+
+#### Code Documentation
 - **JSDoc module-level documentation** added to:
   - `src/security/scrubber.ts` — Entropy tuning guide, threshold table, usage
     examples for `scrubText` and `StreamScrubber`.
@@ -61,6 +129,8 @@ comprehensive JSDoc documentation across all public APIs.
   - `src/workspace/history.ts` — History viewer output and rendering.
   - `src/workspace/rollback.ts` — Rollback preview/apply contract, path
     validation, atomic restore pattern.
+
+#### Testing
 - **Extended scrubber test suite** (`tests/phase2-scrub.test.ts`):
   - Added 14 new tests covering entropy false-positive guard cases: npm
     integrity hashes, long HTTPS URLs, base64 image data headers, JWT header
@@ -69,6 +139,8 @@ comprehensive JSDoc documentation across all public APIs.
   - Added `shannonEntropy` edge-case tests (empty string, single-char, diversity).
   - Added known-secret registry test.
   - Total scrubber test count: 3 → 19.
+
+#### Package Metadata
 - **`author` field** in `package.json` updated to include email address for npm
   publisher attribution.
 - **`keywords` array** in `package.json` extended with `"mitl"`, `"ai"`,
