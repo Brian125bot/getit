@@ -1,3 +1,30 @@
+/**
+ * @module interceptor
+ * @description Man-in-the-Loop (MITL) approval gate for all agent tool calls.
+ *
+ * Every action the LLM requests — running a shell command, reading a file,
+ * creating a file, patching a file — must pass through `interceptToolCall()`
+ * before it executes. The interceptor renders an ANSI-styled approval card to
+ * the terminal and waits for a keystroke response from the user.
+ *
+ * ### Response options
+ * | Key | Meaning |
+ * |-----|---------|
+ * | `Y` / Enter | Approve and execute the action as-is. |
+ * | `n`         | Deny the action; the agent receives an explicit rejection message. |
+ * | `e`         | Edit the payload before execution. The current payload is pre-filled
+ * |             | into the readline prompt using `rl.write()` so the user can arrow-key
+ * |             | to modify a single flag without retyping the full command. |
+ * | `c`         | Clarify — pause execution and ask the agent a follow-up question
+ * |             | inline without dropping conversation context. |
+ *
+ * ### Test mode
+ * Setting `process.env.GETIT_TEST_MODE = '1'` before running tests causes the
+ * interceptor to auto-approve every action without prompting. This is the only
+ * supported bypass mechanism — never disable it in production code.
+ *
+ * @see {@link https://github.com/Brian125bot/getit} for full documentation.
+ */
 import * as readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import { getRuntimeSession } from '../runtime/session.js';
