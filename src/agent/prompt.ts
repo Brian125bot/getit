@@ -1,4 +1,15 @@
+/**
+ * @module agent/prompt
+ * @description System prompt builder for the getit agent.
+ *
+ * v2.0: Extended to inject session memory context, project detection,
+ * user preferences, loaded plugins, and active recipes.
+ */
 import { discoverEnvironment } from '../discovery/environment.js';
+import { buildSessionContext } from '../memory/sessions.js';
+import { buildProjectContext, initProjectMemory } from '../memory/projects.js';
+import { buildPreferencesContext, loadPreferences } from '../memory/preferences.js';
+import { getPluginToolSchemas } from '../plugins/registry.js';
 
 export function buildSystemPrompt(): string {
   const env = discoverEnvironment();
@@ -10,6 +21,40 @@ export function buildSystemPrompt(): string {
   const pathStatus = env.localBinInPath 
     ? 'registered in PATH' 
     : 'NOT registered in PATH (please append ~/.local/bin to PATH if installing user binaries)';
+
+  // v2.0: Build supplemental context sections
+  const contextSections: string[] = [];
+
+  // Project memory
+  try {
+    initProjectMemory(process.cwd());
+    const projectCtx = buildProjectContext();
+    if (projectCtx) {
+      contextSections.push(`## Project Memory\n${projectCtx}`);
+    }
+  } catch { /* project detection is best-effort */ }
+
+  // User preferences
+  try {
+    loadPreferences();
+    const prefCtx = buildPreferencesContext();
+    if (prefCtx) {
+      contextSections.push(`## User Preferences\n${prefCtx}`);
+    }
+  } catch { /* preferences are optional */ }
+
+  // Plugin awareness
+  try {
+    const pluginSchemas = getPluginToolSchemas();
+    if (pluginSchemas.length > 0) {
+      const pluginNames = pluginSchemas.map((s: any) => s.function?.name || 'unknown');
+      contextSections.push(`## Loaded Plugins\nThe following plugin tools are available: ${pluginNames.join(', ')}`);
+    }
+  } catch { /* plugins may not be initialized */ }
+
+  const supplementalContext = contextSections.length > 0
+    ? '\n\n' + contextSections.join('\n\n')
+    : '';
 
   return `CRITICAL: Output ONLY the necessary JSON tool parameters or ANSI bordered workspace cards. Conversational meta-commentary, introductory text, and structural descriptions are strictly forbidden unless directly answering a user inquiry.
 
@@ -42,5 +87,6 @@ ${JSON.stringify({
     verified_binaries: env.verifiedBinaries
   }
 }, null, 2)}
+${supplementalContext}
 `;
 }
