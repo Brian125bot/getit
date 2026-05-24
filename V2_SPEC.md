@@ -18,6 +18,9 @@
 6. [Module D — Watch Mode](#6-module-d--watch-mode)
 7. [Module E — Rich Terminal Dashboard](#7-module-e--rich-terminal-dashboard)
 8. [Module F — Multi-Machine Sync](#8-module-f--multi-machine-sync)
+8b. [Module G — Custom Themable UI Shell (TerminalKit)](#8b-module-g--custom-themable-ui-shell-terminalkit)
+8c. [Module H — Enhanced CLI Control Plane & UX](#8c-module-h--enhanced-cli-control-plane--ux)
+8d. [Module I — OpenRouter Free-Model Auto-Switcher](#8d-module-i--openrouter-free-model-auto-switcher)
 9. [Cross-Cutting Concerns](#9-cross-cutting-concerns)
 10. [Migration from v1.5](#10-migration-from-v15)
 11. [Implementation Roadmap](#11-implementation-roadmap)
@@ -48,6 +51,9 @@ getit v2.0 evolves the project from a reactive, session-stateless command execut
 | D — Watch Mode | `fs.watch`-based file monitoring, build watcher, drift sentinel | `src/watcher/*` |
 | E — Rich TUI | Split-pane terminal dashboard with persistent status bar | `src/ui/dashboard.ts`, `src/ui/panes.ts` |
 | F — Multi-Machine Sync | Encrypted vault, 3-way merge, profile-based sync | `src/sync/*`, `src/vault/*` |
+| G — TerminalKit UI Shell | Custom themable TUI primitives, palettes, glyph sets, animations, accessibility | `src/ui/terminalkit/*`, `.getit/themes/` |
+| H — Control Plane & UX | Command palette, fuzzy completion, contextual hints, REPL macros, inline editor, undo timeline | `src/repl/control-plane/*` |
+| I — OpenRouter Free-Model Auto-Switcher | Live free-tier catalog, capability-aware routing, automatic fallback, cost/latency telemetry | `src/carriers/openrouter/router.ts`, `src/carriers/openrouter/catalog.ts` |
 
 ---
 
@@ -1427,6 +1433,667 @@ The `[a]` option feeds both versions to the LLM with the instruction: "Merge the
 
 ---
 
+## 8b. Module G — Custom Themable UI Shell (TerminalKit)
+
+### 8b.1 Context & Rationale
+
+v1.5 ships a competent but utilitarian terminal experience: ANSI colors, spinners, banners, and the `formatLeftJustified()` helper. v2.0 introduces **TerminalKit** — a zero-dependency, themable UI shell that gives getit a distinctive, attractive visual identity while remaining accessible on dumb terminals and CI runners.
+
+TerminalKit is the *substrate* that Module E (the Rich TUI dashboard) and Module H (Control Plane & UX) render against. Rather than scattering ANSI escape sequences across the codebase, every drawing operation routes through a small set of primitives — `Box`, `Pane`, `Text`, `List`, `Progress`, `Sparkline`, `Toast`, `Modal`, `Prompt`, `Palette`, `Spinner` — that respect the active *theme*, the active *glyph set*, and the active *accessibility profile*.
+
+Design tenets:
+
+1. **Zero dependencies.** No `blessed`, no `ink`, no `chalk`. All ANSI is hand-rolled in `src/ui/terminalkit/ansi.ts`.
+2. **Theme as data.** Themes are JSON. Users author them in `.getit/themes/<name>.json`. Six themes ship built-in.
+3. **Degradation is first-class.** Every primitive answers `render(capabilities)` where `capabilities` is detected once at startup (`detectCapabilities()`).
+4. **Stable layout under resize.** All panes subscribe to a single `ResizeBus`; redraw is double-buffered with a diff renderer so flicker is eliminated.
+5. **Composable, not magical.** TerminalKit primitives are plain classes returning strings or applying writes against a `Surface`. There is no virtual DOM and no reconciler.
+
+### 8b.2 Capability Detection (`src/ui/terminalkit/capabilities.ts`)
+
+```typescript
+export interface TerminalCapabilities {
+  /** stdout is a TTY (interactive). */
+  isTTY: boolean;
+  /** Width in columns (clamped to [40, 400]). */
+  columns: number;
+  /** Height in rows (clamped to [10, 200]). */
+  rows: number;
+  /** Color depth: 'none' | '16' | '256' | 'truecolor'. */
+  colorDepth: 'none' | '16' | '256' | 'truecolor';
+  /** Whether the terminal advertises Unicode (LANG/LC_ALL contains UTF-8). */
+  unicode: boolean;
+  /** Whether the terminal supports the Kitty graphics or Sixel protocol. */
+  graphics: 'none' | 'kitty' | 'sixel';
+  /** Whether the terminal supports OSC-8 hyperlinks (iTerm2, WezTerm, kitty). */
+  hyperlinks: boolean;
+  /** Whether the terminal reports as Apple Terminal, iTerm2, Windows Terminal, etc. */
+  emulator: string;
+  /** Forced simple mode (set by GETIT_SIMPLE_UI=true or non-TTY). */
+  simple: boolean;
+  /** Accessibility profile (env GETIT_A11Y=high-contrast|screen-reader|none). */
+  a11y: 'none' | 'high-contrast' | 'screen-reader';
+}
+
+export function detectCapabilities(): TerminalCapabilities;
+```
+
+Detection rules:
+
+- `colorDepth` derives from `COLORTERM=truecolor`, `TERM=*-256color`, `TERM=xterm`/`screen`/`vt100`, and `NO_COLOR` (forces `'none'`).
+- `unicode` is `true` unless `LANG`/`LC_ALL`/`LC_CTYPE` lacks `utf` (case-insensitive) and `TERM_PROGRAM` is not in a known UTF-8 set.
+- `graphics` probes `KITTY_WINDOW_ID` and `TERM_PROGRAM=WezTerm`/`iTerm.app`.
+- `simple` is forced if `GETIT_SIMPLE_UI=true`, `CI=true`, or stdout is not a TTY.
+- `a11y='screen-reader'` disables all spinners, progress bars, and animations; all output becomes line-oriented with explicit prefixes (`[status]`, `[error]`, etc.).
+
+### 8b.3 Theme Schema (`src/ui/terminalkit/themes/types.ts`)
+
+```typescript
+export interface Theme {
+  name: string;
+  author?: string;
+  version?: string;
+  palette: {
+    bg:        string;  // primary background
+    bgAlt:     string;  // alternate row background (lists)
+    fg:        string;  // primary foreground
+    fgDim:     string;  // secondary text (help, hints)
+    fgMuted:   string;  // tertiary text (timestamps)
+    accent:    string;  // brand accent (logo, active border)
+    accent2:   string;  // secondary accent (selections)
+    success:   string;
+    warning:   string;
+    danger:    string;
+    info:      string;
+    border:    string;
+    borderHot: string;
+    selection: string;
+  };
+  borders: 'rounded' | 'sharp' | 'double' | 'ascii';
+  glyphs: 'unicode' | 'nerdfont' | 'ascii';
+  italics: boolean;
+  spinner: 'dots' | 'pulse' | 'arc' | 'wave' | 'ascii-bar';
+  animationMs: number;
+}
+```
+
+#### Built-in themes (shipped in `src/ui/terminalkit/themes/builtin/`)
+
+| Theme | Mood | Default For |
+|---|---|---|
+| `eclipse` | Cool, deep blue + cyan accent, rounded borders | `truecolor` + `unicode` |
+| `solar` | Warm amber + papyrow, sharp borders | High-contrast warm setups |
+| `mono` | Pure greyscale, ASCII borders | `colorDepth=none`, accessibility |
+| `forge` | Industrial slate + ember orange | Default on Windows Terminal |
+| `meadow` | Botanic greens, double borders | `light` preference |
+| `vapor` | Synthwave magenta/cyan gradients | Demo mode |
+
+Theme files load via `loadTheme(name)` from `.getit/themes/<name>.json` first, then bundled fallback. Invalid themes log a warning and the loader keeps the previous theme.
+
+### 8b.4 Glyph Sets (`src/ui/terminalkit/glyphs.ts`)
+
+```typescript
+export interface GlyphSet {
+  box: { tl: string; tr: string; bl: string; br: string; h: string; v: string;
+         tDown: string; tUp: string; tLeft: string; tRight: string; cross: string };
+  status: { ok: string; warn: string; err: string; info: string; pending: string };
+  bullets: string[];
+  brand: string;
+  progress: string[];        // 8 steps, finest → full
+  sparkline: string[];       // 9 levels
+  arrows: { up: string; down: string; left: string; right: string;
+            collapse: string; expand: string };
+}
+```
+
+Three glyph sets ship: `unicode` (default UTF-8), `nerdfont` (adds Powerline + dev icons; auto-selected when `terminfo` reports a Nerd Font on Linux/macOS), and `ascii` (pure 7-bit fallback). Theme `glyphs` field overrides auto-selection.
+
+### 8b.5 Primitives (`src/ui/terminalkit/primitives/`)
+
+All primitives implement:
+
+```typescript
+export interface Primitive {
+  width: number | 'auto';
+  height: number | 'auto';
+  render(surface: Surface, region: Region, ctx: RenderContext): void;
+}
+```
+
+| Primitive | File | Purpose |
+|---|---|---|
+| `Box` | `box.ts` | Bordered container with optional title and subtitle |
+| `Pane` | `pane.ts` | Scrollable region with persistent scroll state |
+| `Text` | `text.ts` | Wrapped, color-tagged text using `<accent>…</accent>` micro-markup |
+| `List` | `list.ts` | Selectable list with keyboard nav, sticky header, fuzzy filter |
+| `Progress` | `progress.ts` | Determinate + indeterminate bars; supports stacked sub-bars |
+| `Sparkline` | `sparkline.ts` | Inline 8-step sparkline for token rate, latency history |
+| `Spinner` | `spinner.ts` | Themed spinner (replaces v1.5 spinner; superset API) |
+| `Toast` | `toast.ts` | Non-blocking ephemeral notifications (queued by `NotificationQueue`) |
+| `Modal` | `modal.ts` | Center-screen blocking overlay for confirmations |
+| `Prompt` | `prompt.ts` | Single-line input with completion, history, masking |
+| `Palette` | `palette.ts` | Command palette (used by Module H §8c.3) |
+| `Diff` | `diff.ts` | Side-by-side or unified diff renderer with syntax-agnostic gutter |
+
+#### Micro-markup
+
+`Text` accepts inline markup tags that resolve to palette colors:
+
+```
+<accent>getit</accent> <fgMuted>v2.0</fgMuted> — <success>ready</success>
+```
+
+Tags are parsed by `src/ui/terminalkit/markup.ts` (~80 lines). Unknown tags pass through as literal text. Markup never produces unbalanced ANSI: every `\x1b[...m` open is paired with a `\x1b[0m` close at tag end.
+
+#### Surface and double-buffered rendering
+
+```typescript
+// src/ui/terminalkit/surface.ts
+export class Surface {
+  constructor(cols: number, rows: number);
+  put(x: number, y: number, ch: string, style: Style): void;
+  fill(region: Region, style: Style, ch?: string): void;
+  /** Compute the minimal diff against the last flush and write to stdout. */
+  flush(stdout: NodeJS.WriteStream): void;
+}
+```
+
+`flush()` produces a *diff frame*: for each row, emit `CSI y;1H` followed by only the runs that changed since the last frame. This eliminates flicker even on slow PTYs and is the foundation under Module E.
+
+### 8b.6 Animations & Transitions (`src/ui/terminalkit/animate.ts`)
+
+Animations are pull-based: a `Ticker` calls `frame(t)` on registered animatables at the theme's `animationMs` cadence. There is no `setInterval` running unless at least one animation is registered, and the ticker stops when none remain.
+
+Built-in animations:
+
+| Animation | Use |
+|---|---|
+| `pulse(color)` | Border highlight when a pane gains focus |
+| `streamCaret` | Cyclic caret while LLM tokens stream into a pane |
+| `progressShimmer` | Indeterminate progress bar shimmer |
+| `toastSlideIn` | One-row vertical slide for toast notifications |
+| `paletteFade` | 6-frame fade for palette open/close |
+
+All animations honor `a11y='screen-reader'` (no-op) and `simple=true` (no-op).
+
+### 8b.7 Splash & Identity
+
+On REPL launch, TerminalKit renders a splash:
+
+```
+                 ╭──────────────────────────────╮
+                 │   ▄████  ▄███▄  ▄████  ████  │
+                 │   ██     ██ ██  ██  █    ██  │     getit v2.0
+                 │   ██ ██  █████  █████    ██  │     manager-grade CLI
+                 │   ▀████  ██ ██  ██  █   ████ │
+                 ╰──────────────────────────────╯
+   <accent>theme:</accent> eclipse   <accent>carrier:</accent> openrouter   <accent>model:</accent> auto
+   <fgMuted>type</fgMuted> /help <fgMuted>or press</fgMuted> Ctrl-K <fgMuted>for the command palette</fgMuted>
+```
+
+The brand mark is theme-substitutable. On `simple=true`, the splash collapses to a single line:
+
+```
+getit v2.0 — theme=eclipse carrier=openrouter model=auto — /help
+```
+
+### 8b.8 REPL Commands
+
+```
+/theme list                # List built-in + user themes
+/theme set <name>          # Switch theme live (no restart)
+/theme preview <name>      # Render a sampler box without committing
+/theme export <name>       # Print current theme as JSON
+/glyphs set <unicode|nerdfont|ascii>
+/ui simple [on|off]        # Toggle simple-mode override
+/ui a11y <none|high-contrast|screen-reader>
+/ui reload                 # Re-detect capabilities (useful after font swap)
+```
+
+### 8b.9 Strict Acceptance Criteria
+
+- **UIK_001** `detectCapabilities()` returns `simple=true` when stdout is not a TTY.
+- **UIK_002** All six built-in themes load, validate, and render the splash without ANSI artifacts.
+- **UIK_003** Switching theme via `/theme set <name>` repaints the screen within one frame and persists choice to `.getitrc`.
+- **UIK_004** Markup parser never produces unbalanced escape sequences (verified by stripping and re-scanning output).
+- **UIK_005** Double-buffered `Surface.flush()` writes ≤ 30% of full-screen bytes for incremental updates (measured in `ui-surface.test.ts`).
+- **UIK_006** Setting `NO_COLOR=1` strips all ANSI color sequences from rendered output.
+- **UIK_007** Setting `GETIT_A11Y=screen-reader` disables all spinners and animations; output remains line-oriented.
+- **UIK_008** Resizing the terminal triggers a single `ResizeBus` event that propagates to all subscribed primitives within 50 ms.
+- **UIK_009** Loading an invalid theme JSON does not crash; loader logs a warning and retains the previous theme.
+- **UIK_010** With `glyphs='ascii'`, no codepoint above U+007E appears in rendered frames.
+
+---
+
+## 8c. Module H — Enhanced CLI Control Plane & UX
+
+### 8c.1 Context & Rationale
+
+v1.5's REPL is a single-line prompt with slash-commands. It works, but power users (and Brian's own iteration loop — 98+ PRs in a quarter) need a *control plane*: a single surface where every capability is one keystroke away, every state is observable, and every action is reversible.
+
+Module H builds on TerminalKit primitives to deliver:
+
+- A **command palette** (Ctrl-K) with fuzzy search across REPL commands, recipes, plugins, recent prompts, and learned shortcuts.
+- An **omnibar** that auto-classifies input (slash command vs. natural-language prompt vs. recipe invocation vs. shell escape).
+- **Contextual hints** beneath the prompt that surface the next likely action (open file, run tests, push branch).
+- A **multi-line editor mode** (Ctrl-E) with syntax-aware paste detection and bracket matching for long prompts.
+- A **macro recorder** (`/macro record … /macro stop`) that captures a sequence of prompts/commands and replays them on demand.
+- A **status header** showing carrier, model, token budget, drift count, watch state, vault state, and active recipe — all click/tap-target-equivalent via single-letter focus jumps.
+- An **undo timeline pane** showing the last N transactions with one-keystroke rollback.
+- **Inline editor** integration: when MITL flags an `[e]` (edit) on a file mutation, the spec'd file is opened in a tk `Prompt`-backed editor without leaving the REPL.
+
+### 8c.2 Layout (Default Layout B — supersedes §7.2 Layout A; selectable via `/layout`)
+
+```
+┌── getit ── theme:eclipse ── model:nemotron(F) ── tok:12.4k/64k ── drift:0 ── watch:●  ── vault:🔒 ──┐
+│                                                                                                    │
+│   [transcript pane]                                                              [insight pane]    │
+│   ╭───────────────────────────────────────────────────╮  ╭───────────────────────────────────╮   │
+│   │ user: refactor the carrier interface…              │  │ active recipe: none               │   │
+│   │                                                    │  │ next likely: run tests            │   │
+│   │ getit: I'll proceed in 3 steps:                    │  │   ↳ press T to invoke             │   │
+│   │  1. read src/carriers/openrouter/client.ts         │  │ undo:                             │   │
+│   │  2. update interface                               │  │  • c9f50d2 latency opt           │   │
+│   │  3. run tests                                      │  │  • eb7014a sec fixes             │   │
+│   │ [proceed? Y/n/e/c]                                 │  │  (z to rewind)                    │   │
+│   ╰───────────────────────────────────────────────────╯  ╰───────────────────────────────────╯   │
+│                                                                                                    │
+├── omnibar ──────────────────────────────────────────────────────────────────────────────────────┤
+│ › refactor carrier interface to support streaming chunks                          [press Ctrl-K]   │
+├── hints ─────────────────────────────────────────────────────────────────────────────────────────┤
+│  ↑ history   Ctrl-E multi-line   Ctrl-K palette   Tab complete   F2 focus pane   ?  help          │
+└────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+When width < 100 cols, the insight pane collapses behind `F3` toggle. When `simple=true`, the layout collapses to a flat scrolling transcript with the omnibar and a one-line status footer.
+
+### 8c.3 Command Palette (`src/repl/control-plane/palette.ts`)
+
+Triggered by `Ctrl-K`. Renders a `tk.Palette` overlay over the transcript pane. Sources:
+
+1. **Built-in slash commands** (full set, with help line and key chord).
+2. **Plugin tools** (from `PluginRegistry.list()` — see Module A).
+3. **Recipes** (from recipe directory — see Module C). Listed with `▶` glyph.
+4. **Recent prompts** (last 50 from session memory).
+5. **Themes & layouts** (`/theme set <name>`, `/layout <id>`).
+6. **Learned shortcuts** (top 10 most-used commands, from preference learning).
+
+Scoring algorithm (`scoreEntry(query, entry)`):
+
+```
+score = wordPrefixHits * 8
+      + camelOrSnakeHits * 4
+      + substringHits * 2
+      + recencyBonus(entry, now)              // up to +6 within 24h
+      + frequencyBonus(entry)                 // up to +4 for top-3 used
+      - typeDistancePenalty(query, entry)     // edit distance > 0
+```
+
+Top 12 results render with command, description, and *kbd hint* (e.g., `T`, `Ctrl-R`). `Enter` invokes; `Tab` inserts into the omnibar without invoking; `Esc` closes.
+
+### 8c.4 Omnibar Input Classifier (`src/repl/control-plane/classifier.ts`)
+
+```typescript
+export type OmniIntent =
+  | { kind: 'slash'; command: string; args: string }
+  | { kind: 'recipe'; name: string; vars: Record<string, string> }
+  | { kind: 'shell'; raw: string }            // input starts with `!`
+  | { kind: 'pluginTool'; name: string; args: string }
+  | { kind: 'prompt'; text: string };
+
+export function classify(input: string, registry: Snapshot): OmniIntent;
+```
+
+Rules (first match wins):
+
+1. Starts with `/` → `slash`.
+2. Starts with `!` → `shell` (route through MITL `execute_bash` interception).
+3. Single word matches `recipes/<name>.yaml` → `recipe`.
+4. Single word matches a registered plugin tool → `pluginTool`.
+5. Otherwise → `prompt`.
+
+The classifier is *advisory*; the rendered omnibar shows a `tk.Text` badge to the left indicating the detected intent, and the user can override with explicit `/`, `!`, or `▶`. The classifier never executes — it only labels.
+
+### 8c.5 Contextual Hints Engine (`src/repl/control-plane/hints.ts`)
+
+After every agent turn, the hints engine computes 1–3 next-likely actions based on:
+
+- Most recent tool invocations (e.g., if `manage_file` modified `src/**/*.ts`, suggest "run tests").
+- Drift state (`manifest.unhealthy() === true` → "resolve drift").
+- Watcher events queued in the notification queue.
+- Recipe definitions in the project that reference files just touched.
+- Preference learning: actions that this user historically takes after this kind of action.
+
+Hints render as a strip beneath the omnibar with a one-letter chord (e.g., `T` = run tests, `R` = resolve drift, `P` = push branch). Pressing the chord inserts the corresponding command into the omnibar but does *not* auto-submit; the user always confirms.
+
+### 8c.6 Multi-Line Editor Mode (`src/repl/control-plane/editor.ts`)
+
+Triggered by `Ctrl-E` from the omnibar, or by typing a backslash at end-of-line. Opens a `tk.Pane` editor with:
+
+- Bracket matching for `()`, `[]`, `{}`, ` `` `, `"""`.
+- Auto-detect of pasted code blocks → triple-backtick wrapping with language guess (by shebang or first-line `import`/`def`/`fn`).
+- `Ctrl-Enter` submits; `Esc` discards; `Ctrl-S` saves to `.getit/scratch/<timestamp>.md`.
+
+### 8c.7 Macro Recorder (`src/repl/control-plane/macros.ts`)
+
+```
+/macro record <name>       # Start recording. Status bar shows ● REC.
+/macro stop                # Save to .getit/macros/<name>.macro
+/macro run <name>          # Replay (each step still passes through MITL)
+/macro list
+/macro delete <name>
+```
+
+A macro is a JSON file:
+
+```json
+{
+  "name": "ship-pr",
+  "steps": [
+    { "kind": "prompt", "text": "summarize the changes since main" },
+    { "kind": "slash", "command": "tests", "args": "" },
+    { "kind": "shell", "raw": "git push origin HEAD" }
+  ],
+  "createdAt": "2026-05-24T20:00:00Z"
+}
+```
+
+Macros differ from recipes: recipes are *project*-level YAML automations with parameters and gating; macros are *user*-level shortcut sequences for the REPL.
+
+### 8c.8 Status Header & Focus Jumps
+
+The top status header is interactive. Pressing the underlined letter in each segment jumps focus:
+
+- `T` theme picker, `M` model picker, `B` token budget panel, `D` drift resolver, `W` watch toggle, `V` vault unlock.
+
+When focus enters a pane, its border draws with `borderHot` and TerminalKit's `pulse` animation runs for two frames.
+
+### 8c.9 Undo Timeline Pane
+
+The insight pane's lower half shows the last 10 transactions from the shadow store (`backup/shadow-store.ts`). Each row: `<short-sha>  <relative-time>  <summary>`. Keybinds:
+
+- `z` rewind to the previous transaction (calls `getit rollback <hash>` with confirmation).
+- `Z` rewind to the selected row.
+- `Enter` open transaction diff in the transcript pane.
+
+### 8c.10 Keybinding Reference
+
+| Chord | Action |
+|---|---|
+| `Ctrl-K` | Command palette |
+| `Ctrl-E` | Multi-line editor |
+| `Ctrl-R` | Recipe runner overlay |
+| `Ctrl-/` | Toggle hints strip |
+| `Ctrl-L` | Clear transcript |
+| `Ctrl-D` | Quit (with unsaved-state guard) |
+| `Tab` | Complete at cursor (omnibar or palette) |
+| `Shift-Tab` | Cycle pane focus |
+| `F1` | Help overlay |
+| `F2` | Focus transcript pane |
+| `F3` | Toggle insight pane |
+| `F4` | Toggle status header |
+| `z` / `Z` | Undo timeline navigation (when insight pane focused) |
+| `?` | Inline cheat sheet |
+
+All bindings are remappable via `.getit/keymap.json`.
+
+### 8c.11 REPL Commands (additions)
+
+```
+/layout <id>               # Switch between A (linear), B (default split), C (dashboard)
+/keymap edit               # Open keymap.json in inline editor
+/macro …                   # (see §8c.7)
+/hints [on|off]
+/palette                   # Open palette (also Ctrl-K)
+/focus <pane>              # Focus by name (transcript|insight|omnibar|status)
+```
+
+### 8c.12 Strict Acceptance Criteria
+
+- **CTL_001** `Ctrl-K` opens the palette overlay within one frame; `Esc` closes it.
+- **CTL_002** Palette query `"thm ec"` matches `/theme set eclipse` in top 3 results (fuzzy ordering verified).
+- **CTL_003** Omnibar classifier returns `slash` for `/help`, `shell` for `!ls`, `recipe` for `ship-pr` when `.getit/recipes/ship-pr.yaml` exists, `pluginTool` for `read_url` when the plugin is registered, `prompt` otherwise.
+- **CTL_004** Contextual hints surface "run tests" after any `manage_file` mutation under `src/**/*.{ts,tsx,js}`.
+- **CTL_005** `/macro record … /macro stop` produces a valid macro JSON; `/macro run` replays every step through MITL.
+- **CTL_006** Pressing `T` while the status header is focused opens the theme picker.
+- **CTL_007** `z` in the undo timeline triggers `getit rollback <hash>` and prompts for confirmation via MITL.
+- **CTL_008** All keybindings are documented in `?` cheat sheet and remappable via `keymap.json`.
+- **CTL_009** Multi-line editor preserves indentation on paste and auto-wraps code blocks with language hint.
+- **CTL_010** With `GETIT_SIMPLE_UI=true`, palette, hints, multi-line editor, and undo timeline degrade to slash-command equivalents with no UI artifacts.
+
+---
+
+## 8d. Module I — OpenRouter Free-Model Auto-Switcher
+
+### 8d.1 Context & Rationale
+
+v1.5 lets the user pin one OpenRouter model via `GETIT_MODEL`. In practice, OpenRouter's *free tier* fluctuates daily: models go up/down, rate-limits change, context windows differ, some models are abruptly rate-limited mid-session. Sticking to one free model is brittle.
+
+Module I introduces an **Auto-Switcher** that:
+
+1. Discovers free models from OpenRouter's `GET /api/v1/models` endpoint.
+2. Capability-classifies them (chat, tool-use, JSON mode, context length).
+3. Routes each request to the best free model for the *current task*, with **automatic fallback** on rate-limit, timeout, or content-policy errors.
+4. Maintains per-model telemetry (success rate, latency p50/p95, tokens/sec, refusal rate) persisted to disk.
+5. Lets the user override or pin via `/model` commands.
+6. Surfaces routing decisions in the TerminalKit status header (e.g., `model:nemotron(F)` where `(F)` means "free, auto-routed").
+
+Critical constraint: **zero new dependencies.** All HTTP uses `node:https`, JSON uses `JSON.parse`, persistence uses the existing atomic-write pattern.
+
+### 8d.2 Catalog Service (`src/carriers/openrouter/catalog.ts`)
+
+```typescript
+export interface FreeModel {
+  /** OpenRouter model id, e.g. "nvidia/nemotron-3-super-120b-a12b:free" */
+  id: string;
+  name: string;
+  contextLength: number;
+  modalities: ('text' | 'image' | 'tool_use' | 'json_mode')[];
+  provider: string;
+  free: true;
+  toolUse: boolean;
+  jsonMode: boolean;
+  dailyLimit?: number;
+  refreshedAt: number;
+}
+
+export class Catalog {
+  /** Force refresh from the API (rate-limited to once per 10 min unless force=true). */
+  refresh(force?: boolean): Promise<FreeModel[]>;
+  list(): FreeModel[];
+  get(id: string): FreeModel | null;
+}
+```
+
+Refresh logic:
+
+- `GET https://openrouter.ai/api/v1/models` with the user's API key.
+- Filter `pricing.prompt === '0' && pricing.completion === '0'`.
+- Persist to `.getit/cache/openrouter-catalog.json` with a 10-minute TTL.
+- Stale catalog still serves `list()`; refresh runs in background after 10 min.
+- Failed refresh logs a warning; previous catalog continues to serve.
+
+### 8d.3 Capability Classifier
+
+Each `FreeModel` is enriched with:
+
+```typescript
+export interface ClassifiedModel extends FreeModel {
+  tier: 'coder-large' | 'coder-mid' | 'general-large' | 'general-mid' | 'small';
+  roles: ('plan' | 'execute' | 'summarize' | 'review' | 'memory-compress')[];
+  stability: number;       // [0,1] from telemetry (§8d.5)
+}
+```
+
+Classification heuristics (no LLM call):
+
+- `tier='coder-large'`: id contains `code|coder|nemotron|qwen.*coder|deepseek.*coder` AND `contextLength >= 64000`.
+- `tier='general-large'`: `contextLength >= 64000` AND not coder-tagged.
+- `tier='coder-mid'`: coder-tagged AND `contextLength >= 16000`.
+- `tier='general-mid'`: `contextLength >= 16000`.
+- `tier='small'`: otherwise.
+
+Roles default by tier (`coder-large` → `['plan','execute','review']`; `general-large` → `['plan','summarize','memory-compress']`, etc.) and can be overridden via `.getitrc`.
+
+### 8d.4 Router (`src/carriers/openrouter/router.ts`)
+
+```typescript
+export interface RouteRequest {
+  role: 'plan' | 'execute' | 'summarize' | 'review' | 'memory-compress';
+  estTokens: number;
+  needsToolUse: boolean;
+  needsJsonMode: boolean;
+  pinnedId?: string;
+}
+
+export interface RouteDecision {
+  primary: ClassifiedModel;
+  fallbacks: ClassifiedModel[];
+  reason: string;
+}
+
+export class Router {
+  decide(req: RouteRequest): RouteDecision;
+  recordSuccess(modelId: string, latencyMs: number, tokens: number): void;
+  recordFailure(modelId: string, kind: FailureKind): void;
+}
+
+export type FailureKind =
+  | 'rate-limit' | 'timeout' | 'content-policy' | 'tool-misuse'
+  | 'context-exceeded' | 'unknown';
+```
+
+Selection ranking:
+
+```
+fitness = roleMatch(model, req) * 10
+       + (model.contextLength >= req.estTokens * 1.5 ? 5 : -10)
+       + (req.needsToolUse ? (model.toolUse ? 4 : -8) : 0)
+       + (req.needsJsonMode ? (model.jsonMode ? 3 : -6) : 0)
+       + model.stability * 6                       // [0,1] → up to 6
+       + freshnessBonus(model)                     // recently successful
+       - rateLimitPenalty(model, now)              // exponential cooldown
+```
+
+The top-ranked model becomes `primary`; the next three become `fallbacks`. Cooldowns:
+
+- `rate-limit`: 60 s × 2^N (capped 30 min).
+- `timeout`: 30 s.
+- `content-policy`: 5 min (and de-prefer for the remainder of the session).
+- `tool-misuse`: not penalized — fallback only.
+- `context-exceeded`: model is excluded until request's estTokens drops below model's contextLength.
+
+### 8d.5 Telemetry (`src/carriers/openrouter/telemetry.ts`)
+
+Persistent file `.getit/cache/openrouter-telemetry.json` with rolling windows (last 200 calls per model):
+
+```json
+{
+  "nvidia/nemotron-3-super-120b-a12b:free": {
+    "calls": 187,
+    "successes": 174,
+    "rateLimits": 4,
+    "timeouts": 2,
+    "contentPolicy": 0,
+    "p50LatencyMs": 1820,
+    "p95LatencyMs": 4310,
+    "tokensPerSec": 32.4,
+    "lastSuccessAt": 1779657800000,
+    "lastFailureAt": 1779655000000,
+    "lastFailureKind": "rate-limit",
+    "cooldownUntil": 1779658100000
+  }
+}
+```
+
+`stability = clamp01((successes/calls) * 0.7 + recencyTerm * 0.3)` where `recencyTerm` decays linearly over 24 h since last success.
+
+Telemetry writes are atomic and debounced (max once per 2 s).
+
+### 8d.6 Streaming Fallback Mid-Response
+
+If the primary model fails *during streaming* (HTTP/2 stream abort, partial JSON tool call interrupted by 429), the router:
+
+1. Records the failure.
+2. Re-invokes the request against the first fallback with the **partial assistant output** discarded (we never silently merge partial outputs from two different models).
+3. Surfaces a TerminalKit toast: `<warning>switched: nemotron → llama-3.1-405b (rate-limit)</warning>`.
+4. Streaming resumes on the fallback.
+
+Tool calls in flight when the primary aborts are *not* committed — the MITL gate has not been crossed yet because tool execution happens only on the assistant's `finish_reason === 'tool_calls'`. Partial tool JSON is dropped safely.
+
+### 8d.7 Configuration
+
+```ini
+# ─── New in v2.0 (Module I) ───
+GETIT_MODEL_MODE=auto              # auto | pinned
+GETIT_MODEL=                       # if set and MODE=pinned, forced
+GETIT_MODEL_TIER=auto              # auto | coder-large | general-large | …
+GETIT_MODEL_BLACKLIST=             # comma-separated ids to exclude
+GETIT_MODEL_WHITELIST=             # comma-separated ids (if set, only these eligible)
+GETIT_MODEL_REFRESH_MIN=10         # catalog refresh TTL minutes
+GETIT_MODEL_FAILOVER_MAX=3         # max in-request fallback hops (default 3)
+GETIT_TELEMETRY=true               # persist telemetry to disk
+```
+
+### 8d.8 REPL Commands
+
+```
+/model                     # Show current routing decision + fallbacks + telemetry
+/model list                # List free catalog with stability scores
+/model pin <id>            # Override auto routing
+/model unpin               # Return to auto
+/model tier <id>           # Force a tier preference for this session
+/model refresh             # Force a catalog refresh
+/model blacklist add <id>
+/model blacklist remove <id>
+/model why                 # Explain why the last request used the model it did
+```
+
+`/model why` prints the routing decision's `reason`, the top 5 candidates with fitness scores, and the cooldown table.
+
+### 8d.9 Status Header Integration
+
+The model segment in the status header shows:
+
+- `model:<short>(F)` for free auto-routed.
+- `model:<short>(P)` for pinned.
+- `model:<short>(F→F')` while a mid-response fallback is in flight.
+
+Focusing the segment via `M` (see Module H §8c.8) opens a panel listing the primary + fallbacks with live latency sparklines (`tk.Sparkline`).
+
+### 8d.10 Safety & Privacy
+
+- Model id strings are *not* secrets and are emitted in logs unconditionally.
+- Prompt content is scrubbed through `scrubText()` before any request as in v1.5 — unchanged.
+- Telemetry never stores prompt or response content; only timings, token counts, and failure kinds.
+- If `GETIT_TELEMETRY=false`, the telemetry file is not written and the router falls back to a constant `stability = 0.5` for all models.
+
+### 8d.11 Failure Mode Matrix
+
+| Failure | Detection | Action |
+|---|---|---|
+| HTTP 429 | `response.status === 429` | record `rate-limit`, set cooldown, fallback |
+| HTTP 408 / `AbortError` | stream timeout | record `timeout`, set cooldown, fallback |
+| HTTP 403 + content-policy body | regex on body | record `content-policy`, long cooldown, fallback |
+| Stream truncated mid-token | invalid trailing JSON | record `unknown`, fallback |
+| Tool call schema mismatch | post-parse validation | record `tool-misuse`, fallback once, then surface to user |
+| Context overflow (HTTP 400 + body match) | regex `context|length|tokens` | record `context-exceeded`, exclude model, fallback to larger ctx |
+
+### 8d.12 Strict Acceptance Criteria
+
+- **OR_001** `Catalog.refresh()` returns only models with `pricing.prompt === '0' && pricing.completion === '0'`.
+- **OR_002** Stale catalog (>10 min) triggers background refresh on next `list()` call; `list()` itself never blocks on network.
+- **OR_003** `Router.decide({ role:'execute', needsToolUse:true })` never returns a model with `toolUse=false` as primary unless no tool-capable free model exists (in which case it surfaces a warning toast).
+- **OR_004** A rate-limit response sets a cooldown ≥ 60 s and de-prefers the model in the next decision.
+- **OR_005** Mid-stream failure switches to a fallback within one HTTP round-trip and emits a TerminalKit toast.
+- **OR_006** `/model pin <id>` overrides all auto routing for the session; `/model unpin` restores auto.
+- **OR_007** With `GETIT_MODEL_MODE=pinned` and a stale pin (model not in catalog), the router falls back to auto and prints a one-time warning.
+- **OR_008** Telemetry persists to `.getit/cache/openrouter-telemetry.json` and is debounced to ≤ 1 write per 2 s.
+- **OR_009** `GETIT_TELEMETRY=false` disables telemetry writes; `Router.stability` defaults to 0.5.
+- **OR_010** `/model why` prints a structured explanation that names the primary model, the fitness score, the top 5 candidates, and any active cooldowns.
+
+---
+
 ## 9. Cross-Cutting Concerns
 
 ### 9.1 Updated Project Structure
@@ -1473,11 +2140,36 @@ getit/
 │   │   ├── execute-bash.ts      # (unchanged)
 │   │   ├── manage-file.ts       # (unchanged)
 │   │   └── diff.ts              # (unchanged)
+│   ├── repl/                    # ← NEW (Module H)
+│   │   └── control-plane/
+│   │       ├── palette.ts       # Command palette (Ctrl-K)
+│   │       ├── classifier.ts    # Omnibar intent classifier
+│   │       ├── hints.ts         # Contextual hint engine
+│   │       ├── editor.ts        # Multi-line inline editor
+│   │       ├── macros.ts        # Macro recorder/runner
+│   │       └── keymap.ts        # Keymap loader (.getit/keymap.json)
 │   ├── ui/
 │   │   ├── layout.ts            # (unchanged)
 │   │   ├── spinner.ts           # (unchanged)
-│   │   ├── dashboard.ts         # ← NEW: Rich TUI dashboard
-│   │   └── panes.ts             # ← NEW: Pane management
+│   │   ├── dashboard.ts         # ← NEW: Rich TUI dashboard (Module E)
+│   │   ├── panes.ts             # ← NEW: Pane management (Module E)
+│   │   └── terminalkit/         # ← NEW (Module G)
+│   │       ├── ansi.ts          # Hand-rolled ANSI emitter
+│   │       ├── capabilities.ts  # detectCapabilities()
+│   │       ├── surface.ts       # Double-buffered diff renderer
+│   │       ├── markup.ts        # <accent>…</accent> micro-markup
+│   │       ├── animate.ts       # Pull-based Ticker + animations
+│   │       ├── glyphs.ts        # Unicode/Nerd Font/ASCII glyph sets
+│   │       ├── themes/
+│   │       │   ├── types.ts
+│   │       │   └── builtin/     # eclipse, solar, mono, forge, meadow, vapor
+│   │       └── primitives/      # box, pane, text, list, progress,
+│   │                            # sparkline, spinner, toast, modal,
+│   │                            # prompt, palette, diff
+│   ├── carriers/openrouter/     # (existing client.ts plus new files)
+│   │   ├── catalog.ts           # ← NEW (Module I): free-model catalog
+│   │   ├── router.ts            # ← NEW (Module I): routing + fallback
+│   │   └── telemetry.ts         # ← NEW (Module I): per-model stats
 │   ├── vault/                   # ← NEW
 │   │   └── vault.ts             # AES-256-GCM encrypted secrets store
 │   ├── watcher/                 # ← NEW
@@ -1504,7 +2196,21 @@ getit/
 │   ├── sync-vault.test.ts             # ← NEW
 │   ├── sync-merge.test.ts             # ← NEW
 │   ├── sync-profiles.test.ts          # ← NEW
-│   └── ui-dashboard.test.ts           # ← NEW
+│   ├── ui-dashboard.test.ts           # ← NEW
+│   ├── ui-terminalkit-capabilities.test.ts  # ← NEW (UIK_001, UIK_006, UIK_007)
+│   ├── ui-terminalkit-surface.test.ts       # ← NEW (UIK_005, UIK_008)
+│   ├── ui-terminalkit-markup.test.ts        # ← NEW (UIK_004)
+│   ├── ui-terminalkit-themes.test.ts        # ← NEW (UIK_002, UIK_003, UIK_009, UIK_010)
+│   ├── repl-palette.test.ts                 # ← NEW (CTL_001, CTL_002)
+│   ├── repl-classifier.test.ts              # ← NEW (CTL_003)
+│   ├── repl-hints.test.ts                   # ← NEW (CTL_004)
+│   ├── repl-macros.test.ts                  # ← NEW (CTL_005)
+│   ├── repl-keymap.test.ts                  # ← NEW (CTL_008, CTL_010)
+│   ├── repl-editor.test.ts                  # ← NEW (CTL_009)
+│   ├── openrouter-catalog.test.ts           # ← NEW (OR_001, OR_002)
+│   ├── openrouter-router.test.ts            # ← NEW (OR_003, OR_004, OR_006, OR_007)
+│   ├── openrouter-fallback.test.ts          # ← NEW (OR_005)
+│   └── openrouter-telemetry.test.ts         # ← NEW (OR_008, OR_009, OR_010)
 ├── dist/
 ├── package.json
 ├── tsconfig.json
@@ -1546,6 +2252,27 @@ getit sync status                  # Show sync state
 getit sync push                    # Push to remote
 getit sync pull                    # Pull from remote
 getit sync resolve                 # Interactive conflict resolution
+
+# ─── New in v2.0 (Module G — TerminalKit) ───
+getit theme list                   # List built-in + user themes
+getit theme set <name>             # Persist theme to .getitrc
+getit theme preview <name>         # Render a sampler without committing
+getit theme export <name>          # Print theme JSON
+getit ui doctor                    # Print detected TerminalCapabilities
+
+# ─── New in v2.0 (Module H — Control Plane) ───
+getit palette                      # Launch one-shot palette (non-REPL)
+getit macro list
+getit macro run <name>
+getit keymap show
+
+# ─── New in v2.0 (Module I — OpenRouter Auto-Switcher) ───
+getit model                        # Show current decision + telemetry
+getit model list                   # List free catalog with stability
+getit model refresh                # Force a catalog refresh
+getit model pin <id>               # Persist a pinned model
+getit model unpin                  # Return to auto
+getit model why                    # Explain last routing decision
 ```
 
 ### 9.3 Updated `.getitrc` Configuration
@@ -1577,6 +2304,27 @@ GETIT_SIMPLE_UI=false                     # Force simple linear UI (default: fal
 
 # Sync
 GETIT_SYNC_REMOTE=origin                  # Git remote name for sync (default: origin)
+
+# ─── Module G — TerminalKit ───
+GETIT_THEME=eclipse                       # Active theme name
+GETIT_GLYPHS=auto                         # auto | unicode | nerdfont | ascii
+GETIT_A11Y=none                           # none | high-contrast | screen-reader
+GETIT_ANIMATIONS=true                     # Master enable for animations
+GETIT_ANIMATION_MS=120                    # Frame rate cap (lower = smoother)
+
+# ─── Module H — Control Plane ───
+GETIT_LAYOUT=B                            # A (linear) | B (split, default) | C (dashboard)
+GETIT_HINTS=true                          # Contextual hints on/off
+GETIT_KEYMAP=.getit/keymap.json           # Path to user keymap overrides
+
+# ─── Module I — OpenRouter Auto-Switcher ───
+GETIT_MODEL_MODE=auto                     # auto | pinned
+GETIT_MODEL_TIER=auto                     # auto | coder-large | coder-mid | general-large | general-mid | small
+GETIT_MODEL_BLACKLIST=                    # comma-separated ids
+GETIT_MODEL_WHITELIST=                    # comma-separated ids
+GETIT_MODEL_REFRESH_MIN=10                # catalog refresh TTL in minutes
+GETIT_MODEL_FAILOVER_MAX=3                # max fallback hops per request
+GETIT_TELEMETRY=true                      # write per-model telemetry to disk
 ```
 
 ### 9.4 Updated `RuntimeSession`
@@ -1696,7 +2444,41 @@ Implementation MUST proceed in this order. Each phase builds on the previous.
 │  - src/vault/vault.ts, src/sync/profiles.ts, src/sync/merge.ts         │
 │  - Tests: sync-vault.test.ts, sync-merge.test.ts, sync-profiles.test.ts│
 │  Gate: All SYN_001–SYN_008 acceptance criteria pass.                   │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 7: TerminalKit UI Shell (Module G)               [Est: 1 week]  │
+│  Deliverables:                                                         │
+│  - src/ui/terminalkit/{ansi,capabilities,surface,markup,animate,       │
+│    glyphs}.ts                                                          │
+│  - src/ui/terminalkit/themes/{types.ts, builtin/*.json}                │
+│  - src/ui/terminalkit/primitives/*                                     │
+│  - Modified: src/ui/dashboard.ts + src/ui/panes.ts now render against  │
+│    TerminalKit primitives (Module E retrofit)                          │
+│  - Tests: ui-terminalkit-* (4 files)                                   │
+│  Gate: All UIK_001–UIK_010 acceptance criteria pass.                   │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 8: Control Plane & UX (Module H)                 [Est: 1 week]  │
+│  Deliverables:                                                         │
+│  - src/repl/control-plane/{palette,classifier,hints,editor,macros,     │
+│    keymap}.ts                                                          │
+│  - Modified: REPL entry point to mount control-plane surfaces          │
+│  - Tests: repl-* (6 files)                                             │
+│  Gate: All CTL_001–CTL_010 acceptance criteria pass.                   │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 9: OpenRouter Auto-Switcher (Module I)           [Est: 4–6 days]│
+│  Deliverables:                                                         │
+│  - src/carriers/openrouter/{catalog,router,telemetry}.ts               │
+│  - Modified: src/carriers/openrouter/client.ts to consult Router       │
+│    before each request and on stream failure                           │
+│  - Modified: src/agent/loop.ts to thread RouteRequest derived from     │
+│    current turn (role/estTokens/needsToolUse)                          │
+│  - Tests: openrouter-* (4 files)                                       │
+│  Gate: All OR_001–OR_010 acceptance criteria pass.                     │
 └────────────────────────────────────────────────────────────────────────┘
+
+Phases 7–9 may proceed in parallel with each other *after* Phase 5 lands, since
+they share no source files. Phase 8 (Module H) depends on Phase 7 (Module G)
+primitives. Phase 9 (Module I) is fully independent of Phases 7–8 and may be
+delivered first if model reliability is the higher pain point.
 ```
 
 ### 11.2 Milestone Verification
