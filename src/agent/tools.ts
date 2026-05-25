@@ -1,4 +1,13 @@
-export const toolSchemas = [
+/**
+ * @module agent/tools
+ * @description Tool schema definitions for the agent loop.
+ *
+ * v2.0: Dynamic schema generation that merges built-in tool schemas
+ * with any loaded plugin tool schemas.
+ */
+import { getPluginToolSchemas } from '../plugins/registry.js';
+
+export const builtinToolSchemas = [
   {
     type: 'function',
     function: {
@@ -55,3 +64,15 @@ export const toolSchemas = [
     }
   }
 ];
+
+/** Legacy export for backwards compatibility. */
+export const toolSchemas = builtinToolSchemas;
+
+/**
+ * Get the complete tool schema array, merging built-in tools with plugin tools.
+ * This is the v2.0 entry point for dynamic tool schemas.
+ */
+export function getToolSchemas(): any[] {
+  const pluginSchemas = getPluginToolSchemas();
+  return [...builtinToolSchemas, ...pluginSchemas];
+}

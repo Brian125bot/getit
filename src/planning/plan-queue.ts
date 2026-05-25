@@ -1,4 +1,16 @@
-export type PlannedToolName = 'execute_bash' | 'manage_file';
+/**
+ * @module planning/plan-queue
+ * @description Dry-run plan queue for staged tool execution.
+ *
+ * v2.0: PlannedToolName is now a string union that accepts any tool name,
+ * including dynamically loaded plugin tools.
+ */
+
+/**
+ * v2.0: PlannedToolName is a string to support plugin tool names.
+ * Built-in tools are still 'execute_bash' | 'manage_file'.
+ */
+export type PlannedToolName = string;
 
 export interface PlannedToolCall {
   id: string;
@@ -39,6 +51,8 @@ export class PlanQueue {
 export function isMutatingToolCall(tool: PlannedToolName, args: any): boolean {
   if (tool === 'execute_bash') return true;
   if (tool === 'manage_file') return args?.action === 'create' || args?.action === 'patch';
+  // v2.0: Plugin tools are assumed mutating by default (conservative)
+  if (tool !== 'execute_bash' && tool !== 'manage_file') return true;
   return false;
 }
 
@@ -68,6 +82,13 @@ export function renderRoadmap(queue: PlanQueue): string {
         lines.push(`+ ${call.args.replace ?? ''}`);
         lines.push('```');
       }
+    } else {
+      // v2.0: Generic plugin tool display
+      lines.push(`Plugin Tool: \`${call.tool}\``);
+      lines.push('');
+      lines.push('```json');
+      lines.push(JSON.stringify(call.args, null, 2));
+      lines.push('```');
     }
     if (call.risks.length > 0) {
       lines.push(`Risks: ${call.risks.join('; ')}`);

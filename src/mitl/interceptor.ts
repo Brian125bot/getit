@@ -91,8 +91,24 @@ function sliceVisible(text: string, maxLength: number): { chunk: string; remaini
   return { chunk: text.slice(0, i), remaining: text.slice(i) };
 }
 
+/**
+ * v2.0 interception context types.
+ * - BASH / FILE CREATE / FILE PATCH — built-in tool actions (v1)
+ * - PLUGIN / PLUGIN SYSTEM — third-party plugin actions
+ * - RECIPE STEP — automated recipe step execution
+ * - WATCH ACTION — watch-mode triggered action
+ */
+export type InterceptionContext =
+  | 'BASH'
+  | 'FILE CREATE'
+  | 'FILE PATCH'
+  | 'PLUGIN'
+  | 'PLUGIN SYSTEM'
+  | 'RECIPE STEP'
+  | 'WATCH ACTION';
+
 export async function interceptToolCall(
-  context: 'BASH' | 'FILE CREATE' | 'FILE PATCH',
+  context: InterceptionContext,
   payload: string,
   warnings: string[] = [],
   editPayload?: string

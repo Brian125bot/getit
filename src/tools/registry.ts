@@ -1,7 +1,15 @@
+/**
+ * @module tools/registry
+ * @description Central tool dispatch registry.
+ *
+ * v2.0: Extended with plugin tool fallback dispatch. If a tool name is not
+ * a built-in (execute_bash, manage_file), it's dispatched to the plugin registry.
+ */
 import { executeBash } from './execute-bash.js';
 import { manageFile } from './manage-file.js';
 import { getRuntimeSession } from '../runtime/session.js';
-import { isMutatingToolCall, PlannedToolCall, PlannedToolName } from '../planning/plan-queue.js';
+import { isMutatingToolCall, PlannedToolCall } from '../planning/plan-queue.js';
+import { executePlugin } from '../plugins/registry.js';
 import * as fsp from 'node:fs/promises';
 import { assertPathAllowed } from '../security/path-policy.js';
 import { scrubText } from '../security/scrubber.js';
@@ -16,7 +24,7 @@ export async function dispatchToolCall(name: string, args: any): Promise<ToolDis
   try {
     const session = getRuntimeSession();
     if (session.dryRun && (name === 'execute_bash' || name === 'manage_file')) {
-      return await dispatchDryRunToolCall(name as PlannedToolName, args);
+      return await dispatchDryRunToolCall(name as 'execute_bash' | 'manage_file', args);
     }
 
     if (name === 'execute_bash') {
@@ -63,10 +71,26 @@ export async function dispatchToolCall(name: string, args: any): Promise<ToolDis
       };
     }
 
-    return {
-      content: JSON.stringify({ error: `Tool "${name}" is not implemented.` }),
-      haltTurn: false
-    };
+    // v2.0: Plugin tool dispatch fallback
+    try {
+      const pluginResult = await executePlugin(name, args);
+      return {
+        content: JSON.stringify(pluginResult),
+        haltTurn: false
+      };
+    } catch (pluginErr: any) {
+      // If plugin not found either, return unknown tool error
+      if (pluginErr.message?.includes('not found')) {
+        return {
+          content: JSON.stringify({ error: `Tool "${name}" is not implemented and no matching plugin found.` }),
+          haltTurn: false
+        };
+      }
+      return {
+        content: JSON.stringify({ error: `Plugin error: ${pluginErr.message}` }),
+        haltTurn: true
+      };
+    }
   } catch (error: any) {
     return {
       content: JSON.stringify({ error: error.message }),
@@ -75,7 +99,7 @@ export async function dispatchToolCall(name: string, args: any): Promise<ToolDis
   }
 }
 
-async function dispatchDryRunToolCall(name: PlannedToolName, args: any): Promise<ToolDispatchResult> {
+async function dispatchDryRunToolCall(name: 'execute_bash' | 'manage_file', args: any): Promise<ToolDispatchResult> {
   const session = getRuntimeSession();
   const mutating = isMutatingToolCall(name, args);
   const id = `plan_${session.planQueue.all().length + 1}`;
@@ -133,7 +157,7 @@ async function executeDryRunRead(args: any): Promise<ToolDispatchResult> {
   };
 }
 
-function inferRisks(name: PlannedToolName, args: any): string[] {
+function inferRisks(name: string, args: any): string[] {
   const risks: string[] = [];
   if (name === 'execute_bash') risks.push('Command may mutate system state and cannot be automatically rolled back.');
   if (name === 'manage_file' && args?.action === 'patch') risks.push('File patch will be snapshotted before mutation.');

@@ -1,209 +1,157 @@
 # Changelog
 
-All notable changes to `getit` are documented in this file.
+All notable changes to **getit** are documented in this file.
 
-The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and
-this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [2.0.0] — 2025-05-24
 
----
+### 🎉 Major Release — Workspace Operating System
 
-## [1.5.0] — 2026-05-24
-
-### Summary
-Stabilization, hardening, and comprehensive documentation release. Cleans up all
-debug artifacts committed during the rapid v1.0 development sprint, hardens the
-entropy-based secret scrubber against false positives, fixes the npm registry
-metadata, and adds JSDoc documentation across all public APIs. Introduces four
-new documentation files: ARCHITECTURE.md, API.md, SECURITY.md, and CONTRIBUTING.md.
-
-### Fixed
-- **BUG-02 (HIGH):** Removed `build-errors.txt`, `build-errors2.txt`,
-  `build-errors3.txt`, and `fix-tests.cjs` from the repository. These debug
-  artifacts were committed during v1.0 development and incorrectly signalled to
-  evaluators that the build was broken at commit time.
-- **BUG-03 (HIGH):** Corrected `package.json` `repository.url` from
-  `github.com/creetacticalgenius/getit` to the canonical
-  `github.com/Brian125bot/getit`. Added missing `bugs.url` field pointing to
-  the Issues page.
-- **Q-05 (MEDIUM):** Hardened Shannon entropy thresholds in `scrubber.ts` to
-  prevent false-positive redaction of legitimate technical strings:
-  - `BASE64_HARD_THRESHOLD` raised from `5.1` → `5.5` — npm integrity hashes
-    (`sha512-…`), HTTPS certificate fingerprints, and JWT headers are no longer
-    incorrectly redacted.
-  - `BASE64_SOFT_THRESHOLD` raised from `3.7` → `4.2` with minimum token
-    length increased from 40 → 60 chars — long URLs with query parameters are
-    no longer redacted.
-  - All thresholds are now named constants with inline documentation explaining
-    their purpose and calibration rationale.
+v2.0 transforms getit from a focused CLI agent into a complete workspace operating system with 9 new modules, all maintaining the zero-production-dependency constraint.
 
 ### Added
 
-#### Documentation — New Files
-- **`ARCHITECTURE.md`:** Deep-dive technical architecture documentation covering:
-  - Six-layer system architecture diagram with data flow
-  - Complete module dependency graph
-  - Turn execution flow (step-by-step from user input to command execution)
-  - Workspace drift detection flow
-  - Three-layer secret scrubbing pipeline detail
-  - MaskingSession deterministic placeholder system
-  - Manifest lifecycle documentation
-  - Shadow tracking repository internals
-  - Carrier framework preset architecture
-  - Execution kernel async process lifecycle
-  - State management and transaction model
-  - Design decisions (zero deps, structured tool calling, fail-closed)
-- **`API.md`:** Complete public API reference for all 42 source files:
-  - Every exported function, class, interface, type, and constant
-  - Full TypeScript signatures with parameter tables
-  - Return types and structured response interfaces
-  - Organized by module: Agent, Carriers, Security, Tools, Execution,
-    MITL, Workspace, Backup, Planning, Runtime, Discovery, UI, Update
-- **`SECURITY.md`:** Comprehensive security model documentation covering:
-  - Threat model with severity classification
-  - Three-layer defense architecture
-  - MITL gate approval flow and guarantees
-  - Secret scrubbing layers (known-secret registry, pattern matching,
-    Shannon entropy analysis) with threshold tables
-  - False-positive prevention strategies (v1.5 improvements)
-  - Path policy engine (hardcoded bans, .getitignore, global policy)
-  - Absolute path enforcement and symlink resolution
-  - Input sanitization patterns (cascades, redirects, subshells)
-  - Environment isolation for child processes
-  - Fail-closed execution model with non-zero exit handling
-  - Workspace security (shadow tracking, rollback safety, export)
-  - Security profiles (strict, normal, override)
-  - Vulnerability reporting instructions
-- **`CONTRIBUTING.md`:** Contributor guide covering:
-  - Development setup and prerequisites
-  - Build commands reference
-  - Zero production dependencies constraint
-  - ESM module conventions (.js import extensions)
-  - File organization and module map
-  - Adding new tools and carriers (step-by-step)
-  - Testing guide (running, writing, categories, coverage)
-  - Code style guidelines (TypeScript, naming, security-sensitive code)
-  - Pull request guidelines and review process
+#### Module A — Plugin Tool Registry
+- `src/plugins/types.ts` — `PluginToolDefinition`, `PluginRiskLevel`, `PluginParameterSchema`, `PluginExecutionResult` interfaces
+- `src/plugins/validator.ts` — Plugin definition validation with built-in name collision guard
+- `src/plugins/loader.ts` — Plugin discovery from `.getit/plugins/` (workspace) and `~/.config/getit/plugins/` (global)
+- `src/plugins/registry.ts` — Plugin lifecycle: init, reload, execute, event hooks, MITL approval card formatting
 
-#### Documentation — Updated Files
-- **`README.md`:** Major overhaul for v1.5:
-  - Added version badge (v1.5.0)
-  - Added "Why getit?" comparison table (problem → solution)
-  - Expanded feature highlights with self-update
-  - Restructured Quick Start with clearer numbered steps
-  - Added "First Run" section with dashboard example updated to v1.5.0
-  - Added manual `.getitrc` configuration example with timeout
-  - Expanded MITL gate documentation with all four options (Y/n/e/c)
-  - Added carrier configuration table with default models per provider
-  - Added runtime carrier switching examples
-  - Expanded security architecture with guarantee table
-  - Added detailed test coverage table with test counts per suite
-  - Added single-test execution example
-  - Expanded project structure with per-file descriptions
-  - Added version history summary table
-  - Added cross-references to ARCHITECTURE.md, API.md, SECURITY.md,
-    CONTRIBUTING.md
-  - Updated copyright in License section
-- **`.gitignore` hardening:** Added `build-errors*.txt`, `fix-tests.cjs`,
-  `*.debug.txt`, `*.error.txt` patterns so debug artifacts can never be
-  accidentally committed again. Also added common editor (`.vscode/`, `.idea/`),
-  OS (`.DS_Store`, `Thumbs.db`), and test-coverage (`coverage/`) exclusions.
-- **`bugs` field in `package.json`:** Links npm consumers directly to the
-  GitHub Issues page for bug reports.
-- **`CHANGELOG.md` in `package.json` `files` array:** Ensures the changelog is
-  included in the published npm package.
+#### Module B — Session Memory
+- `src/memory/sessions.ts` — NDJSON session history with per-workspace fingerprinting
+- `src/memory/projects.ts` — Auto-detection of tech stacks, common commands, and project learnings
+- `src/memory/preferences.ts` — Learned user preferences (code style, shell, editor, naming conventions)
 
-#### Code Documentation
-- **JSDoc module-level documentation** added to:
-  - `src/security/scrubber.ts` — Entropy tuning guide, threshold table, usage
-    examples for `scrubText` and `StreamScrubber`.
-  - `src/carriers/transport.ts` — Transport layer overview, streaming behaviour,
-    timeout and error-scrubbing contracts.
-  - `src/agent/loop.ts` — AgentLoop architecture, safety mechanisms (runaway
-    guard, halt propagation, history pruning, streaming scrubber).
-  - `src/mitl/interceptor.ts` — MITL gate response options table (Y/n/e/c),
-    test-mode bypass documentation.
-  - `src/workspace/manifest.ts` — Manifest lifecycle, drift detection overview,
-    atomic write pattern.
-  - `src/workspace/tracking.ts` — Shadow Git repository purpose and key
-    functions.
-  - `src/workspace/history.ts` — History viewer output and rendering.
-  - `src/workspace/rollback.ts` — Rollback preview/apply contract, path
-    validation, atomic restore pattern.
+#### Module C — Task Recipes
+- `src/recipes/types.ts` — Recipe, RecipeStep, RecipeParameter, RecordingSession types
+- `src/recipes/yaml-parser.ts` — Zero-dependency YAML parser and serializer
+- `src/recipes/recorder.ts` — Live recording of agent tool calls as recipe steps
+- `src/recipes/engine.ts` — Recipe execution with template resolution, conditions, retries, capture
 
-#### Testing
-- **Extended scrubber test suite** (`tests/phase2-scrub.test.ts`):
-  - Added 14 new tests covering entropy false-positive guard cases: npm
-    integrity hashes, long HTTPS URLs, base64 image data headers, JWT header
-    segments, package version refs.
-  - Added `StreamScrubber` buffering and flush tests.
-  - Added `shannonEntropy` edge-case tests (empty string, single-char, diversity).
-  - Added known-secret registry test.
-  - Total scrubber test count: 3 → 19.
+#### Module D — Watch Mode
+- `src/watcher/daemon.ts` — File system watcher using `fs.watch()` with glob patterns, debouncing, recursive watching
+- `src/watcher/hooks.ts` — Action hooks: build, test, lint, drift-check, custom commands
+- `src/watcher/build.ts` — Auto-detect build systems (npm/pnpm/yarn/bun/cargo/go)
+- `src/watcher/drift.ts` — Watch-mode drift detection integration
+- `src/watcher/notifications.ts` — Non-intrusive terminal notification system
 
-#### Package Metadata
-- **`author` field** in `package.json` updated to include email address for npm
-  publisher attribution.
-- **`keywords` array** in `package.json` extended with `"mitl"`, `"ai"`,
-  `"automation"` for better npm discoverability.
+#### Module E — Rich TUI Dashboard
+- `src/ui/dashboard.ts` — Multi-pane ANSI dashboard with session status, plugin counts, memory stats
+- `src/ui/panes.ts` — Pane layout system with toggle, priority sorting, and configurable renderers
+
+#### Module F — Multi-Machine Sync
+- `src/vault/vault.ts` — AES-256-GCM encrypted vault with PBKDF2 key derivation (310,000 iterations)
+- `src/sync/profiles.ts` — Profile create/load/list/delete/export/import
+- `src/sync/merge.ts` — Conflict detection, resolution strategies (local/remote/manual), union merging
+
+#### Module G — TerminalKit UI Shell
+- `src/ui/terminalkit/ansi.ts` — SGR, FG/BG colors, 256-color, true color, cursor, screen control
+- `src/ui/terminalkit/capabilities.ts` — Terminal feature detection with graceful degradation
+- `src/ui/terminalkit/surface.ts` — 2D cell-based rendering surface with compositing
+- `src/ui/terminalkit/markup.ts` — Rich text markup parser (`*bold*`, `_italic_`, `!color!text!`)
+- `src/ui/terminalkit/animate.ts` — Progress bars, animated spinners, typing effects
+- `src/ui/terminalkit/glyphs.ts` — Named glyph library with Unicode/ASCII auto-fallback
+- `src/ui/terminalkit/themes/builtin/default.ts` — Theme system with default, dark, and minimal themes
+
+#### Module H — CLI Control Plane
+- `src/repl/control-plane/palette.ts` — Fuzzy-searchable command palette with all built-in commands
+- `src/repl/control-plane/classifier.ts` — Input classification: slash commands, recipes, macros, natural language
+- `src/repl/control-plane/hints.ts` — Contextual hint provider system with auto-complete
+- `src/repl/control-plane/editor.ts` — Multi-line input editor with readline-style keybindings
+- `src/repl/control-plane/macros.ts` — User-defined command macros with argument substitution
+- `src/repl/control-plane/keymap.ts` — Configurable keyboard shortcut mapping
+
+#### Module I — OpenRouter Auto-Switcher
+- `src/carriers/openrouter/catalog.ts` — Model catalog fetching with 30-minute cache
+- `src/carriers/openrouter/router.ts` — Intelligent model routing by task type, cost, context, capabilities
+- `src/carriers/openrouter/telemetry.ts` — Per-model usage tracking, cost reporting, NDJSON persistence
 
 ### Changed
-- **Version bumped** from `1.0.1` → `1.5.0`.
-- `author` field updated from `"CreeTacticalGenius"` to
-  `"Brian Laposa <creetacticalgenius@gmail.com>"`.
+
+- `src/agent/tools.ts` — `getToolSchemas()` function dynamically merges built-in + plugin tool schemas
+- `src/agent/loop.ts` — Memory context injection, dynamic schemas, recipe recording integration
+- `src/agent/prompt.ts` — Project memory, user preferences, and plugin awareness in system prompt
+- `src/tools/registry.ts` — Plugin tool dispatch fallback for unknown tool names
+- `src/mitl/interceptor.ts` — Extended `InterceptionContext` type with PLUGIN, RECIPE STEP, WATCH ACTION
+- `src/runtime/session.ts` — New fields: `watchActive`, `vaultUnlocked`, `recipeRecording`, `activeRecipe`
+- `src/planning/plan-queue.ts` — `PlannedToolName` widened to `string` for plugin tools; generic roadmap rendering
+- `package.json` — Version bumped to 2.0.0
+
+### Removed
+
+- `PHASE2.MD` — Superseded by V2_SPEC.md
+- `PHASE3.md` — Superseded by V2_SPEC.md
+- `finalphase.md` — Superseded by V2_SPEC.md
+- `v1.1.md` — Superseded by CHANGELOG.md
+- `AGENT_SPEC.md` — Superseded by V2_SPEC.md
 
 ---
 
-## [1.0.1] — 2026-05-23
+## [1.5.0] — 2025-05-24
 
-### Fixed
-- Post-publish patch: corrected `bin` entry in `package.json` to point to
-  `./dist/src/index.js` (was missing the `src/` segment on some build paths).
+### Added
+- Comprehensive documentation: README.md, ARCHITECTURE.md, API.md, SECURITY.md, CONTRIBUTING.md
+- Detailed CHANGELOG with full v1.0–v1.5 history
+- V2_SPEC.md — Complete v2.0 specification with 9 modules
 
----
-
-## [1.0.0] — 2026-05-23
-
-### Added — Initial release
-- **Zero-dependency architecture.** Only `typescript` and `@types/node` in
-  `devDependencies`. Runtime binary ships with no npm dependencies.
-- **Man-in-the-Loop (MITL) approval gate** — every shell command and file
-  mutation is intercepted and presented to the user with `[Y/n/e/c]` options
-  before execution.
-- **11 LLM carrier presets** — OpenRouter, OpenAI, Anthropic, Gemini, Groq,
-  DeepSeek, Mistral, Azure OpenAI, Ollama, Together AI, and Perplexity.
-- **Carrier registry** with preset-based auth, base URL, and default model
-  configuration. Switchable at runtime via `/model` and `/carrier` commands.
-- **Shannon-entropy secret scrubber** — real-time masking of API keys, tokens,
-  and high-entropy strings in both LLM context and terminal output.
-- **Three-layer security model:**
-  1. TypeScript MITL interceptor (approval gate)
-  2. Environment scrubber (env-var key stripping)
-  3. Path policy engine (`.getitignore`-based access control)
-- **Shadow Git tracking repository** at `~/.local/state/getit/tracking/` for
-  version-controlled, scrubbed copies of all tracked workspace files.
-- **Workspace manifest** (`.getit-manifest.json`) with SHA-256 fingerprinting
-  and drift detection.
-- **Rollback system** — preview and apply any shadow commit to the live
-  workspace.
-- **Export system** — produce a scrubbed, portable snapshot of tracked files.
-- **Atomic file writes** — UUID temp-file + rename pattern in `fs-utils.ts`
-  prevents partial-write corruption.
-- **AgentLoop** with 25-message history pruning to prevent context-window
-  overflow on long sessions.
-- **Setup wizard** (`getit setup`) for first-run configuration.
-- **Doctor command** (`getit doctor`) for connectivity and configuration checks.
-- **Update command** (`getit update`) for self-updating from npm.
-- **REPL slash commands:** `/status`, `/resolve`, `/history`, `/rollback`,
-  `/export`, `/model`, `/models`, `/carrier`, `/timeout`, `/undo`, `/plan`,
-  `/help`, `/clear`.
-- **26 test files, 114 tests** covering all major subsystems.
-- **README.md** with ASCII security architecture diagram, full command
-  reference, and carrier configuration table.
-- **AGENT_SPEC.md, PHASE2.MD, PHASE3.md, finalphase.md** — complete
-  architecture specification documents.
+### Changed
+- Improved code documentation across all source files
 
 ---
 
-[1.5.0]: https://github.com/Brian125bot/getit/compare/v1.0.1...v1.5.0
-[1.0.1]: https://github.com/Brian125bot/getit/compare/v1.0.0...v1.0.1
-[1.0.0]: https://github.com/Brian125bot/getit/releases/tag/v1.0.0
+## [1.4.0] — 2025-05-23
+
+### Added
+- Carrier doctor diagnostic system (`src/carriers/doctor.ts`)
+- Workspace drift advisor (`src/workspace/drift-advisor.ts`)
+- Workspace healer for automatic remediation (`src/workspace/healer.ts`)
+- Workspace export with scrubbing (`src/workspace/export.ts`)
+
+---
+
+## [1.3.0] — 2025-05-22
+
+### Added
+- Carrier transport layer with model resolution (`src/carriers/transport.ts`)
+- Multi-carrier session management (`src/carriers/session.ts`)
+- Carrier model definitions (`src/carriers/models.ts`)
+- Setup wizard for first-run configuration (`src/setup/wizard.ts`)
+
+---
+
+## [1.2.0] — 2025-05-21
+
+### Added
+- Plan queue for dry-run mode (`src/planning/plan-queue.ts`)
+- Backup ledger for file operations (`src/backup/ledger.ts`)
+- Shadow store for file snapshots (`src/backup/shadow-store.ts`)
+- Workspace rollback capabilities (`src/workspace/rollback.ts`)
+- Workspace history tracking (`src/workspace/history.ts`)
+- Async process execution (`src/execution/async-process.ts`)
+- Log buffer for process output (`src/execution/log-buffer.ts`)
+
+---
+
+## [1.1.0] — 2025-05-20
+
+### Added
+- Workspace drift detection (`src/workspace/drift.ts`)
+- Workspace tracking system (`src/workspace/tracking.ts`)
+- Workspace profiles (`src/workspace/profiles.ts`)
+- Workspace manifest (`src/workspace/manifest.ts`)
+- Environment scrubber (`src/security/env-scrubber.ts`)
+- Policy configuration (`src/security/policy.ts`)
+
+---
+
+## [1.0.0] — 2025-05-19
+
+### Added
+- Core agent loop with streaming LLM support
+- MITL interceptor with Y/n/e/c approval gate
+- Built-in tools: execute_bash, manage_file (read/create/patch)
+- Secret scrubbing with Shannon entropy detection
+- Path policy enforcement
+- Workspace boundary detection
+- Terminal UI (layout, spinner)
+- OpenRouter and OpenAI-compatible carrier support
+- Full test suite (26 test files)

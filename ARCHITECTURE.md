@@ -1,4 +1,4 @@
-# Architecture — getit v1.5.0
+# Architecture — getit v2.0.0
 
 > Deep-dive technical reference for the internal architecture, data flow, and module interactions.
 
