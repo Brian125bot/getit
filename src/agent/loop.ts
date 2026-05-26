@@ -35,7 +35,7 @@ import { scrubText, StreamScrubber } from '../security/scrubber.js';
 import { loadConfig } from '../security/secrets-loader.js';
 import { resolveActivePreset } from '../carriers/registry.js';
 import { TerminalSpinner } from '../ui/spinner.js';
-import { buildSessionContext, appendSessionEntry } from '../memory/sessions.js';
+import { buildSessionContext, recordToolCall } from '../memory/sessions.js';
 import { buildProjectContext } from '../memory/projects.js';
 import { buildPreferencesContext } from '../memory/preferences.js';
 import { isRecording, recordStep } from '../recipes/recorder.js';
@@ -224,15 +224,9 @@ export class AgentLoop {
             
             const dispatchResult = await dispatchToolCall(name, args);
 
-            // v2.0: Record to session memory
+            // v2.0: Record to session memory (best-effort; never halts the loop)
             try {
-              await appendSessionEntry({
-                type: 'tool_call',
-                tool: name,
-                args: { ...args, command: args.command?.slice(0, 200) },
-                success: !dispatchResult.haltTurn,
-                timestamp: new Date().toISOString()
-              });
+              await recordToolCall(name, !dispatchResult.haltTurn);
             } catch { /* session memory write is best-effort */ }
 
             // Append the tool execution result back to the history

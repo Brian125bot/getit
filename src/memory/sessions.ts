@@ -15,6 +15,46 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import * as crypto from 'node:crypto';
 
+// ---------------------------------------------------------------------------
+// Module-level singleton state (stateful session cache for the running process)
+// ---------------------------------------------------------------------------
+
+let _fingerprint: string = '';
+let _entries: SessionEntry[] = [];
+
+/** Derive a deterministic 16-char hex fingerprint from a directory path. */
+function computeFingerprint(cwd: string): string {
+  return crypto.createHash('sha256').update(cwd).digest('hex').slice(0, 16);
+}
+
+/**
+ * Initialize session memory for the current workspace.
+ * Loads existing session entries from disk into the module cache.
+ * Call once at startup (does not need to be awaited — graceful degradation if
+ * the disk I/O hasn't completed before the first buildSessionContext() call).
+ */
+export async function initSessionMemory(cwd: string): Promise<void> {
+  _fingerprint = computeFingerprint(cwd);
+  _entries = await loadSessionEntries(_fingerprint);
+}
+
+/**
+ * Record a tool call in the current session (stateful convenience wrapper).
+ * Used by AgentLoop.runTurn() so it doesn't need to manage fingerprints.
+ */
+export async function recordToolCall(toolName: string, success: boolean): Promise<void> {
+  if (!_fingerprint) return; // Session memory not yet initialized — skip silently
+  const entry = await appendSessionEntry(_fingerprint, {
+    userPrompt: `[tool] ${toolName}`,
+    assistantSummary: success ? `${toolName} succeeded` : `${toolName} failed`,
+    toolsUsed: [toolName],
+    workingDirectory: process.cwd()
+  });
+  _entries.push(entry);
+  // Enforce 50-entry cap in memory (disk already has the append)
+  if (_entries.length > 50) _entries = _entries.slice(-50);
+}
+
 export interface SessionEntry {
   id: string;
   timestamp: string;
@@ -98,14 +138,20 @@ export async function appendSessionEntry(
  * Build a context summary from recent session entries.
  * Used to inject into the system prompt for continuity.
  */
-export function buildSessionContext(entries: SessionEntry[], maxTokenBudget: number = 2000): string {
-  if (entries.length === 0) return '';
+/**
+ * Build a context summary from session entries.
+ * When called with no arguments, uses the module-level singleton cache.
+ * When called with explicit entries, behaves as a pure function (for tests).
+ */
+export function buildSessionContext(entries?: SessionEntry[], maxTokenBudget: number = 2000): string {
+  const toUse = entries ?? _entries;
+  if (toUse.length === 0) return '';
 
   const lines: string[] = ['## Recent Session History'];
   let charCount = 0;
 
   // Work backwards from most recent
-  const reversed = [...entries].reverse();
+  const reversed = [...toUse].reverse();
 
   for (const entry of reversed) {
     const line = `- [${entry.timestamp}] "${entry.userPrompt}" → ${entry.assistantSummary}${entry.toolsUsed.length > 0 ? ` (tools: ${entry.toolsUsed.join(', ')})` : ''}`;

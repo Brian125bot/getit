@@ -12,7 +12,7 @@ Version 2.0 is a major expansion that transforms getit from a focused CLI agent 
 
 | Module | Description |
 |--------|-------------|
-| **Plugin Tool Registry** | Extend getit with custom tools loaded from `.getit/plugins/` or `~/.config/getit/plugins/` |
+| **Plugin Tool Registry** | Extend getit with custom tools loaded from `.getit/tools/` or `~/.config/getit/tools/` |
 | **Session Memory** | Persistent session history, project detection, and learned user preferences |
 | **Task Recipes** | Record, save, and replay multi-step workflows as YAML recipe files |
 | **Watch Mode** | File system monitoring with auto-build, drift detection, and custom hooks |
@@ -141,10 +141,10 @@ src/
 
 ## Plugin System
 
-Create custom tools by adding TypeScript files to `.getit/plugins/` in your workspace or `~/.config/getit/plugins/` globally:
+Create custom tools by adding TypeScript files to `.getit/tools/` in your workspace or `~/.config/getit/tools/` globally:
 
 ```typescript
-// .getit/plugins/my-tool.ts
+// .getit/tools/my-tool.ts
 export default {
   name: 'my_custom_tool',
   description: 'Does something useful',

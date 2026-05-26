@@ -53,6 +53,17 @@ export interface LearningEntry {
 
 const DATA_DIR = path.join(os.homedir(), '.local', 'state', 'getit', 'projects');
 
+// ---------------------------------------------------------------------------
+// Module-level singleton (stateful cache for the running process)
+// ---------------------------------------------------------------------------
+
+let _currentProject: ProjectMemory | null = null;
+
+/** Get the currently loaded project memory (may be null if not initialized). */
+export function getCurrentProject(): ProjectMemory | null {
+  return _currentProject;
+}
+
 function getProjectPath(fingerprint: string): string {
   return path.join(DATA_DIR, `${fingerprint}.json`);
 }
@@ -210,26 +221,34 @@ export async function addLearning(
 /**
  * Build project context string for system prompt injection.
  */
-export function buildProjectContext(memory: ProjectMemory): string {
+/**
+ * Build project context string for system prompt injection.
+ * When called with no arguments, uses the module-level singleton cache.
+ * When called with explicit memory, behaves as a pure function (for tests).
+ */
+export function buildProjectContext(memory?: ProjectMemory): string {
+  const toUse = memory ?? _currentProject;
+  if (!toUse) return '';
+
   const lines: string[] = ['## Project Context'];
 
-  lines.push(`- Project: ${memory.projectName}`);
-  lines.push(`- Language: ${memory.techStack.language}`);
-  if (memory.techStack.framework) lines.push(`- Framework: ${memory.techStack.framework}`);
-  lines.push(`- Package Manager: ${memory.techStack.packageManager}`);
-  if (memory.techStack.buildTool) lines.push(`- Build Tool: ${memory.techStack.buildTool}`);
-  if (memory.techStack.testRunner) lines.push(`- Test Runner: ${memory.techStack.testRunner}`);
+  lines.push(`- Project: ${toUse.projectName}`);
+  lines.push(`- Language: ${toUse.techStack.language}`);
+  if (toUse.techStack.framework) lines.push(`- Framework: ${toUse.techStack.framework}`);
+  lines.push(`- Package Manager: ${toUse.techStack.packageManager}`);
+  if (toUse.techStack.buildTool) lines.push(`- Build Tool: ${toUse.techStack.buildTool}`);
+  if (toUse.techStack.testRunner) lines.push(`- Test Runner: ${toUse.techStack.testRunner}`);
 
-  if (memory.commonCommands.length > 0) {
+  if (toUse.commonCommands.length > 0) {
     lines.push('\n### Frequently Used Commands');
-    for (const cmd of memory.commonCommands.slice(0, 10)) {
+    for (const cmd of toUse.commonCommands.slice(0, 10)) {
       lines.push(`- \`${cmd.command}\` — ${cmd.description} (used ${cmd.frequency}x)`);
     }
   }
 
-  if (memory.learnings.length > 0) {
+  if (toUse.learnings.length > 0) {
     lines.push('\n### Accumulated Learnings');
-    for (const learn of memory.learnings.slice(-10)) {
+    for (const learn of toUse.learnings.slice(-10)) {
       lines.push(`- [${learn.category}] ${learn.content}`);
     }
   }
@@ -240,17 +259,53 @@ export function buildProjectContext(memory: ProjectMemory): string {
 /**
  * Initialize project memory for a new workspace.
  */
+/**
+ * Initialize project memory for a workspace.
+ *
+ * Overload 1 (single-arg, used by prompt.ts): pass only the rootPath.
+ *   Fingerprint and project name are auto-derived from the path.
+ *   If memory already exists on disk it is loaded; otherwise a new record
+ *   is created by scanning the directory for tech-stack markers.
+ *
+ * Overload 2 (three-arg, used by tests and advanced callers): pass an
+ *   explicit fingerprint, name, and rootPath.
+ */
 export async function initProjectMemory(
-  fingerprint: string,
-  projectName: string,
-  rootPath: string
+  fingerprintOrRootPath: string,
+  projectName?: string,
+  rootPath?: string
 ): Promise<ProjectMemory> {
-  const techStack = await detectTechStack(rootPath);
+  let fp: string;
+  let name: string;
+  let root: string;
+
+  if (rootPath !== undefined && projectName !== undefined) {
+    // 3-arg form: explicit fingerprint, name, rootPath
+    fp = fingerprintOrRootPath;
+    name = projectName;
+    root = rootPath;
+  } else {
+    // 1-arg form: derive fingerprint and name from rootPath
+    root = fingerprintOrRootPath;
+    const { createHash } = await import('node:crypto');
+    fp = createHash('sha256').update(root).digest('hex').slice(0, 16);
+    name = path.basename(root);
+  }
+
+  // If we already have data on disk, load it
+  const existing = await loadProjectMemory(fp);
+  if (existing) {
+    _currentProject = existing;
+    return existing;
+  }
+
+  // Otherwise create a new project memory record
+  const techStack = await detectTechStack(root);
 
   const memory: ProjectMemory = {
-    fingerprint,
-    projectName,
-    rootPath,
+    fingerprint: fp,
+    projectName: name,
+    rootPath: root,
     techStack,
     commonCommands: [],
     filePatterns: [],
@@ -259,5 +314,6 @@ export async function initProjectMemory(
   };
 
   await saveProjectMemory(memory);
+  _currentProject = memory;
   return memory;
 }
