@@ -46,7 +46,7 @@ interface EncryptedVault {
   tag: string;        // hex
 }
 
-const VAULT_DIR = path.join(os.homedir(), '.config', 'getit');
+const VAULT_DIR = process.env.GETIT_CONFIG_DIR || path.join(os.homedir(), '.config', 'getit');
 const VAULT_FILE = path.join(VAULT_DIR, 'vault.enc');
 const PBKDF2_ITERATIONS = 310_000;
 const KEY_LENGTH = 32; // AES-256

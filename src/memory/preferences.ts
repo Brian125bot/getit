@@ -48,6 +48,12 @@ export interface SafetyPreferences {
 const PREFS_DIR = path.join(os.homedir(), '.config', 'getit');
 const PREFS_FILE = path.join(PREFS_DIR, 'preferences.json');
 
+// ---------------------------------------------------------------------------
+// Module-level singleton (stateful cache for the running process)
+// ---------------------------------------------------------------------------
+
+let _currentPrefs: UserPreferences | null = null;
+
 function defaultPreferences(): UserPreferences {
   return {
     verbosity: 'auto',
@@ -76,14 +82,20 @@ function defaultPreferences(): UserPreferences {
 /**
  * Load user preferences from disk.
  */
+/**
+ * Load user preferences from disk.
+ * Caches the result in module-level state; subsequent synchronous calls to
+ * buildPreferencesContext() will use the cached value.
+ */
 export async function loadPreferences(): Promise<UserPreferences> {
   try {
     const content = await fsp.readFile(PREFS_FILE, 'utf-8');
     const parsed = JSON.parse(content);
-    return { ...defaultPreferences(), ...parsed };
+    _currentPrefs = { ...defaultPreferences(), ...parsed };
   } catch {
-    return defaultPreferences();
+    _currentPrefs = defaultPreferences();
   }
+  return _currentPrefs!;
 }
 
 /**
@@ -161,23 +173,30 @@ export function learnCodeStyleFromContent(content: string): Partial<CodeStylePre
 /**
  * Build preferences context string for system prompt injection.
  */
-export function buildPreferencesContext(prefs: UserPreferences): string {
+/**
+ * Build preferences context string for system prompt injection.
+ * When called with no arguments, uses the module-level singleton cache.
+ * Falls back to defaultPreferences() so it is always safe to call with no args.
+ * When called with explicit prefs, behaves as a pure function (for tests).
+ */
+export function buildPreferencesContext(prefs?: UserPreferences): string {
+  const toUse = prefs ?? _currentPrefs ?? defaultPreferences();
   const lines: string[] = ['## User Preferences'];
 
-  if (prefs.verbosity !== 'auto') {
-    lines.push(`- Verbosity: ${prefs.verbosity}`);
+  if (toUse.verbosity !== 'auto') {
+    lines.push(`- Verbosity: ${toUse.verbosity}`);
   }
 
-  if (prefs.codeStyle.indentation !== 'unknown') {
-    lines.push(`- Indentation: ${prefs.codeStyle.indentation}${prefs.codeStyle.indentation === 'spaces' ? ` (${prefs.codeStyle.indentSize})` : ''}`);
+  if (toUse.codeStyle.indentation !== 'unknown') {
+    lines.push(`- Indentation: ${toUse.codeStyle.indentation}${toUse.codeStyle.indentation === 'spaces' ? ` (${toUse.codeStyle.indentSize})` : ''}`);
   }
-  if (prefs.codeStyle.quoteStyle !== 'unknown') {
-    lines.push(`- Quote style: ${prefs.codeStyle.quoteStyle}`);
+  if (toUse.codeStyle.quoteStyle !== 'unknown') {
+    lines.push(`- Quote style: ${toUse.codeStyle.quoteStyle}`);
   }
 
-  if (Object.keys(prefs.custom).length > 0) {
+  if (Object.keys(toUse.custom).length > 0) {
     lines.push('\n### Custom Preferences');
-    for (const [key, value] of Object.entries(prefs.custom)) {
+    for (const [key, value] of Object.entries(toUse.custom)) {
       lines.push(`- ${key}: ${value}`);
     }
   }

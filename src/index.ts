@@ -32,6 +32,25 @@ import { WorkspaceRollbackManager } from './workspace/rollback.js';
 import { exportScrubbedWorkspace } from './workspace/export.js';
 import { checkForUpdates, performUpdate } from './update.js';
 
+// ─── v2.0 Module Imports ────────────────────────────────────────────────────
+import { loadAllPlugins } from './plugins/loader.js';
+import { getAllPlugins, getPlugin, executePlugin, reloadPlugins, initPluginRegistry } from './plugins/registry.js';
+import { initSessionMemory, buildSessionContext } from './memory/sessions.js';
+import { initProjectMemory, buildProjectContext, getCurrentProject } from './memory/projects.js';
+import { loadPreferences } from './memory/preferences.js';
+import { discoverRecipes, loadRecipe, executeRecipe } from './recipes/engine.js';
+import { startRecording, stopRecording, isRecording, saveRecipeToWorkspace } from './recipes/recorder.js';
+import { WatchDaemon } from './watcher/daemon.js';
+import { vaultExists, createVault, unlockVault, lockVault, isVaultUnlocked, setVaultEntry, getVaultEntry, deleteVaultEntry, listVaultEntries } from './vault/vault.js';
+import { createProfile, loadProfile, listProfiles } from './sync/profiles.js';
+import { renderDashboard, renderStatusBar, DashboardState } from './ui/dashboard.js';
+import { classifyInput } from './repl/control-plane/classifier.js';
+import { registerBuiltinCommands, searchPalette, renderPalette } from './repl/control-plane/palette.js';
+
+// ─── v2.0 Watch Daemon Singleton ────────────────────────────────────────────
+let _watchDaemon: WatchDaemon | null = null;
+let _watchEventCount = 0;
+
 // Dynamic version loader resolving relative to both source and compiled dist paths
 function getVersion(): string {
   try {
@@ -264,6 +283,20 @@ async function bootstrap() {
   }
   configureRuntimeSession({ policyProfile: activeProfile });
 
+  // v2.0: Register palette and initialize memory asynchronously (best-effort)
+  try { registerBuiltinCommands(); } catch { /* palette is non-critical */ }
+  initSessionMemory(process.cwd()).catch(() => { /* best-effort */ });
+  initProjectMemory(process.cwd()).catch(() => { /* best-effort */ });
+  loadPreferences().catch(() => { /* best-effort */ });
+
+  // v2.0: Load plugins from project plugin dir (best-effort)
+  try {
+    const pluginDir = join(process.cwd(), '.getit', 'tools');
+    if (existsSync(pluginDir)) {
+      await initPluginRegistry(process.cwd());
+    }
+  } catch { /* plugins are non-critical */ }
+
   const isDryRun = values['dry-run'] !== undefined ? !!values['dry-run'] : config.dryRun;
   if (isDryRun) {
     configureRuntimeSession({ dryRun: true });
@@ -312,15 +345,53 @@ async function bootstrap() {
     process.exit(0);
   }
 
-  const VALID_COMMANDS = ['undo', 'config', 'doctor', 'models', 'manifest', 'status', 'inspect', 'export', 'resolve', 'stage', 'history', 'log', 'rollback'];
+  const VALID_COMMANDS = ['undo', 'config', 'doctor', 'models', 'manifest', 'status', 'inspect', 'export', 'resolve', 'stage', 'history', 'log', 'rollback', 'run', 'watch', 'plugins', 'vault', 'sync', 'recipe'];
   if (positionals.length > 0 && !VALID_COMMANDS.includes(positionals[0])) {
-    console.error(`\x1b[31mError: Unknown command "${positionals[0]}".\x1b[0m`);
-    console.error(`Run "getit --help" for available commands.`);
-    process.exit(1);
+    // Allow free-form prompts (anything not matching a command is a prompt)
+    if (positionals.length > 1 || !VALID_COMMANDS.some(c => positionals[0].startsWith(c))) {
+      // Fall through to one-shot mode below
+    }
   }
 
   if (['manifest', 'status', 'inspect', 'export', 'resolve', 'stage', 'history', 'log', 'rollback'].includes(positionals[0])) {
     await handleWorkspaceCli(positionals, values);
+  }
+
+  // v2.0 CLI subcommands
+  if (positionals[0] === 'run') {
+    await handleRunCli(positionals.slice(1));
+    closeReadlineInterface();
+    process.exit(0);
+  }
+
+  if (positionals[0] === 'plugins') {
+    await handlePluginsCli(positionals.slice(1));
+    closeReadlineInterface();
+    process.exit(0);
+  }
+
+  if (positionals[0] === 'vault') {
+    await handleVaultCli(positionals.slice(1));
+    closeReadlineInterface();
+    process.exit(0);
+  }
+
+  if (positionals[0] === 'sync') {
+    await handleSyncCli(positionals.slice(1));
+    closeReadlineInterface();
+    process.exit(0);
+  }
+
+  if (positionals[0] === 'watch') {
+    await handleWatchCli();
+    closeReadlineInterface();
+    process.exit(0);
+  }
+
+  if (positionals[0] === 'recipe') {
+    await handleRecipeCli(positionals.slice(1));
+    closeReadlineInterface();
+    process.exit(0);
   }
 
   if (values.model) {
@@ -713,6 +784,307 @@ async function handleSlashCommand(input: string, agent: AgentLoop, systemPrompt:
         console.log('  To change, type: \x1b[1;33m/model <model_name>\x1b[0m');
       }
       return;
+
+    // ─── v2.0 Commands ────────────────────────────────────────────────────────
+
+    case '/plugins': {
+      const subcmd = arg.split(/\s+/)[0];
+      const subarg = arg.split(/\s+/).slice(1).join(' ');
+      if (subcmd === 'reload') {
+        try {
+          const pluginDir = join(process.cwd(), '.getit', 'tools');
+          if (existsSync(pluginDir)) {
+            await reloadPlugins(process.cwd());
+          }
+          console.log(`\x1b[32m  ✓ Plugins reloaded: ${getAllPlugins().length} loaded.\x1b[0m`);
+        } catch (e: any) {
+          console.log(`  \x1b[31mPlugin reload error: ${e.message}\x1b[0m`);
+        }
+      } else if (subcmd === 'info' && subarg) {
+        const p = getPlugin(subarg);
+        if (!p) {
+          console.log(`  \x1b[31mPlugin "${subarg}" not found.\x1b[0m`);
+        } else {
+          console.log(`\n  \x1b[1;36m${p.name}\x1b[0m  [risk: ${p.risk}]`);
+          console.log(`  ${p.description}\n`);
+        }
+      } else {
+        const all = getAllPlugins();
+        if (all.length === 0) {
+          console.log('\n  \x1b[2mNo plugins loaded. Place .js plugin files in .getit/tools/\x1b[0m\n');
+        } else {
+          console.log(`\n  \x1b[1;36mLoaded Plugins (${all.length}):\x1b[0m`);
+          for (const p of all) {
+            const riskColor = p.risk === 'system' ? '\x1b[31m' : p.risk === 'write' ? '\x1b[33m' : '\x1b[32m';
+            console.log(`  ${riskColor}[${p.risk}]\x1b[0m \x1b[1;37m${p.name}\x1b[0m — ${p.description}`);
+          }
+          console.log('');
+        }
+        console.log('  \x1b[2m/plugins reload    /plugins info <name>\x1b[0m\n');
+      }
+      return;
+    }
+
+    case '/memory': {
+      const subcmd = arg.split(/\s+/)[0];
+      if (subcmd === 'clear') {
+        console.log('  \x1b[2m(Session memory is reset on restart)\x1b[0m\n');
+      } else {
+        const ctx = buildSessionContext();
+        if (!ctx) {
+          console.log('\n  \x1b[2mNo session memory entries yet.\x1b[0m\n');
+        } else {
+          console.log('\n' + ctx + '\n');
+        }
+        const proj = buildProjectContext();
+        if (proj) {
+          console.log(proj + '\n');
+        }
+      }
+      return;
+    }
+
+    case '/context': {
+      const proj = buildProjectContext();
+      const sess = buildSessionContext();
+      if (!proj && !sess) {
+        console.log('\n  \x1b[2mNo context available yet.\x1b[0m\n');
+      } else {
+        if (proj) console.log('\n' + proj);
+        if (sess) console.log('\n' + sess);
+        console.log('');
+      }
+      return;
+    }
+
+    case '/recipe':
+    case '/recipes': {
+      const subcmd = arg.split(/\s+/)[0];
+      const subarg = arg.split(/\s+/).slice(1).join(' ');
+      if (!subcmd || subcmd === 'list') {
+        try {
+          const recipes = await discoverRecipes(process.cwd());
+          if (recipes.length === 0) {
+            console.log('\n  \x1b[2mNo recipes found in .getit/recipes/\x1b[0m\n');
+          } else {
+            console.log(`\n  \x1b[1;36mAvailable Recipes (${recipes.length}):\x1b[0m`);
+            for (const r of recipes) {
+              console.log(`  \x1b[1;37m${r.name}\x1b[0m [${r.source}]`);
+            }
+            console.log('');
+          }
+        } catch (e: any) {
+          console.log(`  \x1b[31mError listing recipes: ${e.message}\x1b[0m\n`);
+        }
+      } else if (subcmd === 'run' && subarg) {
+        try {
+          const recipesDir = join(process.cwd(), '.getit', 'recipes');
+          const recipeFile = join(recipesDir, subarg.endsWith('.yaml') ? subarg : `${subarg}.yaml`);
+          const recipe = await loadRecipe(recipeFile);
+          let i = 0;
+          await executeRecipe(recipe, {}, {
+            onStepStart: (step) => {
+              i++;
+              console.log(`  \x1b[2mStep ${i}: ${step.tool}(${JSON.stringify(step.args)})\x1b[0m`);
+            }
+          });
+          console.log(`  \x1b[32m✓ Recipe "${recipe.name}" completed.\x1b[0m\n`);
+        } catch (e: any) {
+          console.log(`  \x1b[31mRecipe error: ${e.message}\x1b[0m\n`);
+        }
+      } else if (subcmd === 'create') {
+        console.log('  \x1b[2mCreate recipe template in .getit/recipes/<name>.yaml\x1b[0m\n');
+        console.log('  \x1b[2mSee docs for recipe YAML format.\x1b[0m\n');
+      } else if (subcmd === 'save' && subarg) {
+        if (!isRecording()) {
+          console.log('  \x1b[31mNot currently recording. Use /recipe record first.\x1b[0m\n');
+        } else {
+          try {
+            const saved = stopRecording();
+            if (saved) {
+              saved.name = subarg;
+              await saveRecipeToWorkspace(saved, process.cwd());
+              console.log(`  \x1b[32m✓ Recipe saved as "${saved.name}" with ${saved.steps.length} step(s).\x1b[0m\n`);
+            }
+          } catch (e: any) {
+            console.log(`  \x1b[31mSave error: ${e.message}\x1b[0m\n`);
+          }
+        }
+      } else if (subcmd === 'record') {
+        startRecording('new_recipe', 'Recorded recipe');
+        console.log('  \x1b[32m● Recording started. Use /recipe save <name> to save.\x1b[0m\n');
+      } else {
+        console.log('  Usage: /recipes list | run <name> | record | save <name> | create\n');
+      }
+      return;
+    }
+
+    case '/watch': {
+      const subcmd = arg.split(/\s+/)[0];
+      if (subcmd === 'start' || !subcmd) {
+        if (_watchDaemon?.isRunning()) {
+          console.log('  \x1b[33mWatch mode already active.\x1b[0m\n');
+        } else {
+          _watchDaemon = new WatchDaemon(process.cwd());
+          _watchDaemon.on('change', (event) => {
+            _watchEventCount++;
+            process.stdout.write(`\r\x1b[36m[watch]\x1b[0m ${event.type}: ${event.relativePath}\n`);
+          });
+          await _watchDaemon.start();
+          console.log('  \x1b[32m● Watch mode started.\x1b[0m\n');
+        }
+      } else if (subcmd === 'stop') {
+        if (_watchDaemon?.isRunning()) {
+          _watchDaemon.stop();
+          console.log('  \x1b[33m○ Watch mode stopped.\x1b[0m\n');
+        } else {
+          console.log('  \x1b[2mWatch mode not running.\x1b[0m\n');
+        }
+      } else if (subcmd === 'status') {
+        const running = _watchDaemon?.isRunning() ?? false;
+        console.log(`\n  Watch Mode:  \x1b[1;37m${running ? '\x1b[32mactive' : '\x1b[2minactive'}\x1b[0m`);
+        console.log(`  Events seen: \x1b[1;37m${_watchEventCount}\x1b[0m\n`);
+      } else {
+        console.log('  Usage: /watch [start|stop|status]\n');
+      }
+      return;
+    }
+
+    case '/dashboard': {
+      const state: DashboardState = {
+        sessionActive: true,
+        model: getActiveModel(),
+        carrier: loadConfig().carrier,
+        watchActive: _watchDaemon?.isRunning() ?? false,
+        watchEvents: _watchEventCount,
+        pluginsLoaded: getAllPlugins().length,
+        memoryEntries: 0,
+        recipeCount: 0,
+        dryRunActive: getRuntimeSession().dryRun,
+        policyProfile: getRuntimeSession().policyProfile,
+        vaultUnlocked: isVaultUnlocked(),
+        recentActions: []
+      };
+      console.log('\n' + centerBlock(renderDashboard(state)) + '\n');
+      return;
+    }
+
+    case '/vault': {
+      const subcmd = arg.split(/\s+/)[0];
+      const subarg = arg.split(/\s+/).slice(1).join(' ');
+
+      if (!subcmd || subcmd === 'status') {
+        const exists = await vaultExists();
+        if (!exists) {
+          console.log('\n  \x1b[2mNo vault found. Run /vault init to create one.\x1b[0m\n');
+        } else {
+          const locked = isVaultUnlocked() ? '\x1b[32m🔓 Unlocked\x1b[0m' : '\x1b[33m🔒 Locked\x1b[0m';
+          const entries = isVaultUnlocked() ? listVaultEntries() : [];
+          console.log(`\n  Vault: ${locked}`);
+          if (isVaultUnlocked()) {
+            console.log(`  Entries: \x1b[1;37m${entries.length}\x1b[0m`);
+          }
+          console.log('');
+        }
+      } else if (subcmd === 'init') {
+        try {
+          const rl = getReadlineInterface();
+          const pass = await rl.question('  \x1b[1;36mNew vault passphrase: \x1b[0m');
+          await createVault(pass);
+          console.log('  \x1b[32m✓ Vault created and unlocked.\x1b[0m\n');
+        } catch (e: any) {
+          console.log(`  \x1b[31mVault creation error: ${e.message}\x1b[0m\n`);
+        }
+      } else if (subcmd === 'unlock') {
+        try {
+          const rl = getReadlineInterface();
+          const pass = await rl.question('  \x1b[1;36mVault passphrase: \x1b[0m');
+          await unlockVault(pass);
+          console.log('  \x1b[32m✓ Vault unlocked.\x1b[0m\n');
+        } catch (e: any) {
+          console.log(`  \x1b[31mVault unlock failed: ${e.message}\x1b[0m\n`);
+        }
+      } else if (subcmd === 'lock') {
+        lockVault();
+        console.log('  \x1b[33m🔒 Vault locked.\x1b[0m\n');
+      } else if (subcmd === 'get' && subarg) {
+        if (!isVaultUnlocked()) { console.log('  \x1b[31mVault is locked.\x1b[0m\n'); return; }
+        const entry = getVaultEntry(subarg);
+        if (!entry) {
+          console.log(`  \x1b[31mNo entry found for key "${subarg}".\x1b[0m\n`);
+        } else {
+          console.log(`  \x1b[1;37m${entry.key}\x1b[0m [${entry.category}] = \x1b[32m${entry.value}\x1b[0m\n`);
+        }
+      } else if (subcmd === 'set') {
+        if (!isVaultUnlocked()) { console.log('  \x1b[31mVault is locked.\x1b[0m\n'); return; }
+        const [key, ...valParts] = subarg.split(/\s+/);
+        const value = valParts.join(' ');
+        if (!key || !value) { console.log('  Usage: /vault set <key> <value>\n'); return; }
+        await setVaultEntry(key, value);
+        console.log(`  \x1b[32m✓ Entry "${key}" saved.\x1b[0m\n`);
+      } else if (subcmd === 'delete') {
+        if (!isVaultUnlocked()) { console.log('  \x1b[31mVault is locked.\x1b[0m\n'); return; }
+        const deleted = await deleteVaultEntry(subarg);
+        console.log(deleted ? `  \x1b[32m✓ Entry "${subarg}" deleted.\x1b[0m\n` : `  \x1b[31mEntry not found.\x1b[0m\n`);
+      } else if (subcmd === 'list') {
+        if (!isVaultUnlocked()) { console.log('  \x1b[31mVault is locked.\x1b[0m\n'); return; }
+        const entries = listVaultEntries();
+        if (entries.length === 0) {
+          console.log('  \x1b[2m(no entries)\x1b[0m\n');
+        } else {
+          for (const e of entries) {
+            console.log(`  \x1b[36m[${e.category}]\x1b[0m \x1b[1;37m${e.key}\x1b[0m  \x1b[2m${e.lastModified}\x1b[0m`);
+          }
+          console.log('');
+        }
+      } else {
+        console.log('  Usage: /vault [status|init|unlock|lock|get <key>|set <key> <val>|delete <key>|list]\n');
+      }
+      return;
+    }
+
+    case '/sync': {
+      const subcmd = arg.split(/\s+/)[0];
+      const subarg = arg.split(/\s+/).slice(1).join(' ');
+      if (!subcmd || subcmd === 'status') {
+        const profiles = await listProfiles().catch(() => []);
+        console.log(`\n  Sync Profiles: \x1b[1;37m${profiles.length}\x1b[0m`);
+        for (const p of profiles) {
+          console.log(`  \x1b[36m${p.name}\x1b[0m (machine: ${p.machine}) — ${p.createdAt.slice(0, 10)}`);
+        }
+        console.log('');
+      } else if (subcmd === 'push') {
+        const name = subarg || 'default';
+        const cfg = loadConfig();
+        const preset = resolveActivePreset(cfg.carrier, cfg.baseUrl);
+        await createProfile(name, {
+          carrierId: cfg.carrier,
+          model: getActiveModel(),
+          baseUrl: cfg.baseUrl,
+          timeout: getDefaultTimeout()
+        });
+        console.log(`  \x1b[32m✓ Profile "${name}" saved.\x1b[0m\n`);
+      } else if (subcmd === 'pull') {
+        const name = subarg || 'default';
+        const profile = await loadProfile(name);
+        if (!profile) {
+          console.log(`  \x1b[31mProfile "${name}" not found.\x1b[0m\n`);
+        } else {
+          if (profile.carrier.model) setActiveModel(profile.carrier.model);
+          console.log(`  \x1b[32m✓ Profile "${name}" loaded (model: ${profile.carrier.model}).\x1b[0m\n`);
+        }
+      } else {
+        console.log('  Usage: /sync [status|push [name]|pull [name]]\n');
+      }
+      return;
+    }
+
+    case '/palette': {
+      const results = searchPalette(arg, 20);
+      console.log('\n' + centerBlock(renderPalette(results, arg)) + '\n');
+      return;
+    }
+
     default:
       console.log(`\x1b[31m  Unknown command: ${cmd}\x1b[0m`);
       console.log('  Type \x1b[1;33m/help\x1b[0m to see available commands.\n');
@@ -1047,6 +1419,85 @@ async function handleWorkspaceCli(positionals: string[], values: any) {
       console.error(`\x1b[31mError: ${err.message}\x1b[0m`);
       process.exit(1);
     }
+  }
+}
+// ─── v2.0 CLI Command Handlers ──────────────────────────────────────────────────
+
+async function handleRunCli(args: string[]) {
+  if (args.length === 0) {
+    console.error('\x1b[31mError: Missing prompt for run command.\x1b[0m');
+    process.exit(1);
+  }
+  const prompt = args.join(' ');
+  const systemPrompt = buildSystemPrompt();
+  const agent = new AgentLoop(systemPrompt);
+  try {
+    await agent.runTurn(prompt);
+  } catch (err: any) {
+    console.error(`\x1b[31mExecution Error: ${err.message}\x1b[0m`);
+    process.exit(1);
+  }
+}
+
+async function handlePluginsCli(args: string[]) {
+  const subcmd = args[0];
+  const pluginDir = join(process.cwd(), '.getit', 'tools');
+  if (subcmd === 'reload' || subcmd === 'load') {
+    if (existsSync(pluginDir)) {
+      await reloadPlugins(process.cwd());
+      console.log(`\x1b[32m✓ Loaded plugins: ${getAllPlugins().length}\x1b[0m`);
+    } else {
+      console.log('\x1b[33mNo plugins directory found at .getit/tools\x1b[0m');
+    }
+  } else {
+    console.log(`Plugins loaded: ${getAllPlugins().length}`);
+  }
+}
+
+async function handleVaultCli(args: string[]) {
+  console.log('\x1b[33mPlease use /vault from the interactive REPL.\x1b[0m');
+}
+
+async function handleSyncCli(args: string[]) {
+  const profiles = await listProfiles().catch(() => []);
+  console.log(`\nSync Profiles: \x1b[1;37m${profiles.length}\x1b[0m`);
+  for (const p of profiles) {
+    console.log(`  \x1b[36m${p.name}\x1b[0m (machine: ${p.machine}) — ${p.createdAt.slice(0, 10)}`);
+  }
+}
+
+async function handleWatchCli() {
+  const daemon = new WatchDaemon(process.cwd());
+  daemon.on('change', (event) => {
+    console.log(`\x1b[36m[watch]\x1b[0m ${event.type}: ${event.relativePath}`);
+  });
+  await daemon.start();
+  console.log('\x1b[32m● Watch daemon started. Press Ctrl+C to exit.\x1b[0m');
+  
+  // Keep alive
+  await new Promise(() => {});
+}
+
+async function handleRecipeCli(args: string[]) {
+  const subcmd = args[0];
+  const name = args[1];
+  
+  if (subcmd === 'run' && name) {
+    const recipesDir = join(process.cwd(), '.getit', 'recipes');
+    const recipeFile = join(recipesDir, name.endsWith('.yaml') ? name : `${name}.yaml`);
+    try {
+      const recipe = await loadRecipe(recipeFile);
+      await executeRecipe(recipe, {}, {
+        onStepStart: (step) => {
+          console.log(`\x1b[2mRunning: ${step.tool}(${JSON.stringify(step.args)})\x1b[0m`);
+        }
+      });
+    } catch (err: any) {
+      console.error(`\x1b[31mRecipe Error: ${err.message}\x1b[0m`);
+      process.exit(1);
+    }
+  } else {
+    console.log('Usage: getit recipe run <name>');
   }
 }
 
