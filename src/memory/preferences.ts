@@ -45,8 +45,8 @@ export interface SafetyPreferences {
   blockedCommands: string[];
 }
 
-const PREFS_DIR = path.join(os.homedir(), '.config', 'getit');
-const PREFS_FILE = path.join(PREFS_DIR, 'preferences.json');
+const PREFS_DIR = () => process.env.GETIT_CONFIG_DIR || path.join(os.homedir(), '.config', 'getit');
+const PREFS_FILE = () => path.join(PREFS_DIR(), 'preferences.json');
 
 // ---------------------------------------------------------------------------
 // Module-level singleton (stateful cache for the running process)
@@ -87,11 +87,32 @@ function defaultPreferences(): UserPreferences {
  * Caches the result in module-level state; subsequent synchronous calls to
  * buildPreferencesContext() will use the cached value.
  */
+function deepMergePreferences(target: UserPreferences, source: Record<string, any>): UserPreferences {
+  const isObject = (obj: any): obj is Record<string, any> =>
+    obj && typeof obj === 'object' && !Array.isArray(obj);
+
+  if (!isObject(target) || !isObject(source)) {
+    return source as unknown as UserPreferences;
+  }
+
+  const merged: any = { ...target };
+
+  for (const key of Object.keys(source)) {
+    if (isObject(source[key]) && isObject(target[key as keyof UserPreferences])) {
+      merged[key] = deepMergePreferences(target[key as keyof UserPreferences] as any, source[key]);
+    } else {
+      merged[key] = source[key];
+    }
+  }
+
+  return merged as UserPreferences;
+}
+
 export async function loadPreferences(): Promise<UserPreferences> {
   try {
-    const content = await fsp.readFile(PREFS_FILE, 'utf-8');
+    const content = await fsp.readFile(PREFS_FILE(), 'utf-8');
     const parsed = JSON.parse(content);
-    _currentPrefs = { ...defaultPreferences(), ...parsed };
+    _currentPrefs = deepMergePreferences(defaultPreferences(), parsed);
   } catch {
     _currentPrefs = defaultPreferences();
   }
@@ -102,9 +123,9 @@ export async function loadPreferences(): Promise<UserPreferences> {
  * Save user preferences to disk.
  */
 export async function savePreferences(prefs: UserPreferences): Promise<void> {
-  await fsp.mkdir(PREFS_DIR, { recursive: true });
+  await fsp.mkdir(PREFS_DIR(), { recursive: true });
   prefs.lastUpdated = new Date().toISOString();
-  await fsp.writeFile(PREFS_FILE, JSON.stringify(prefs, null, 2), 'utf-8');
+  await fsp.writeFile(PREFS_FILE(), JSON.stringify(prefs, null, 2), 'utf-8');
 }
 
 /**
