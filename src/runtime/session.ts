@@ -7,6 +7,7 @@
 import { randomUUID } from 'node:crypto';
 import { MaskingSession } from '../security/scrubber.js';
 import { PlanQueue } from '../planning/plan-queue.js';
+import { ViolationRecord } from '../security/guardrail-types.js';
 
 export type PolicyProfile = 'strict' | 'normal' | 'override';
 
@@ -26,6 +27,7 @@ export interface RuntimeSession {
   vaultUnlocked: boolean;
   recipeRecording: boolean;
   activeRecipe: string | null;
+  guardrailViolations: ViolationRecord[];
 }
 
 let session: RuntimeSession = createRuntimeSession();
@@ -47,6 +49,7 @@ export function createRuntimeSession(overrides: Partial<RuntimeSession> = {}): R
     vaultUnlocked: false,
     recipeRecording: false,
     activeRecipe: null,
+    guardrailViolations: [],
     ...overrides
   };
 }
