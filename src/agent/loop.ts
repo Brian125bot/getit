@@ -167,8 +167,16 @@ export class AgentLoop {
         const mitlResult = await renderGuardrailViolationCard(session.guardrailViolations);
 
         if (mitlResult.action === 'heal') {
-          const healPrompt = `[GUARDRAIL VIOLATION]: The following structural violations were detected and must be repaired immediately:\n\n` +
-            session.guardrailViolations.map(v => `- [${v.severity.toUpperCase()}] ${v.ruleId}: ${v.description}\n  File: ${v.filePath} (Line ${v.line})\n  Remediation: ${v.remediationHint}`).join('\n');
+          const violationLines = session.guardrailViolations
+            .slice(0, 10)
+            .map(v => `- [${v.severity.toUpperCase()}] ${v.ruleId}: ${v.description}\n  File: ${v.filePath} (Line ${v.line})\n  Remediation: ${v.remediationHint}`)
+            .join("\n");
+
+          const exceedMsg = session.guardrailViolations.length > 10
+            ? `\n\n... and ${session.guardrailViolations.length - 10} more violations. Please focus on these first.`
+            : "";
+
+          const healPrompt = `[GUARDRAIL VIOLATION]: The following structural violations were detected and must be repaired immediately:\n\n${violationLines}${exceedMsg}`;
 
           this.messages.push({ role: 'user', content: healPrompt });
           session.guardrailViolations = []; // Clear for next turn
