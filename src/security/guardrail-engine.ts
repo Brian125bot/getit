@@ -75,8 +75,27 @@ export async function validateWorkspaceFile(filePath: string, workspaceRoot: str
     const lines = content.split(/\r?\n/);
 
     for (const rule of applicableRules) {
-      const forbiddenRegexes = rule.forbiddenPatterns.map(p => new RegExp(p));
-      const allowedRegexes = (rule.allowedPatterns || []).map(p => new RegExp(p));
+      const forbiddenRegexes = rule.forbiddenPatterns
+        .map(p => {
+          try {
+            return new RegExp(p);
+          } catch (e: any) {
+            console.warn(`[guardrail] Invalid regex in rule "${rule.id}": ${p} — ${e.message}`);
+            return null;
+          }
+        })
+        .filter((r): r is RegExp => r !== null);
+
+      const allowedRegexes = (rule.allowedPatterns || [])
+        .map(p => {
+          try {
+            return new RegExp(p);
+          } catch (e: any) {
+            console.warn(`[guardrail] Invalid allowed pattern in rule "${rule.id}": ${p} — ${e.message}`);
+            return null;
+          }
+        })
+        .filter((r): r is RegExp => r !== null);
 
       lines.forEach((line, index) => {
         // Skip if line matches any allowed pattern
