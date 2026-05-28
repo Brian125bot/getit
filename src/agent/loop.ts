@@ -30,6 +30,8 @@
 import { sendChatRequest, ChatMessage } from './client.js';
 import { getToolSchemas } from './tools.js';
 import { dispatchToolCall } from '../tools/registry.js';
+import { renderGuardrailViolationCard } from '../mitl/interceptor.js';
+import { undoLedger } from '../backup/ledger.js';
 import { getRuntimeSession, startPromptTransaction } from '../runtime/session.js';
 import { scrubText, StreamScrubber } from '../security/scrubber.js';
 import { loadConfig } from '../security/secrets-loader.js';
@@ -148,6 +150,48 @@ export class AgentLoop {
 
     while (continueLoop) {
       iterationCount++;
+      // v2.0: Architectural Guardrail Interception
+      const session = getRuntimeSession();
+      const blockingViolations = session.guardrailViolations.filter(v => v.severity === 'block');
+      const warningViolations = session.guardrailViolations.filter(v => v.severity === 'warn');
+
+      // Print non-blocking warnings
+      if (warningViolations.length > 0) {
+        for (const warn of warningViolations) {
+          console.log(`\n\x1b[1;33m[GUARDRAIL WARNING] ${warn.ruleId}: ${warn.description}\x1b[0m`);
+          console.log(`\x1b[33m  File: ${warn.filePath} (line ${warn.line})\x1b[0m`);
+        }
+      }
+
+      if (blockingViolations.length > 0) {
+        const mitlResult = await renderGuardrailViolationCard(session.guardrailViolations);
+
+        if (mitlResult.action === 'heal') {
+          const violationLines = session.guardrailViolations
+            .slice(0, 10)
+            .map(v => `- [${v.severity.toUpperCase()}] ${v.ruleId}: ${v.description}\n  File: ${v.filePath} (Line ${v.line})\n  Remediation: ${v.remediationHint}`)
+            .join("\n");
+
+          const exceedMsg = session.guardrailViolations.length > 10
+            ? `\n\n... and ${session.guardrailViolations.length - 10} more violations. Please focus on these first.`
+            : "";
+
+          const healPrompt = `[GUARDRAIL VIOLATION]: The following structural violations were detected and must be repaired immediately:\n\n${violationLines}${exceedMsg}`;
+
+          this.messages.push({ role: 'user', content: healPrompt });
+          session.guardrailViolations = []; // Clear for next turn
+          continue; // Re-invoke chat completion for healing
+        } else if (mitlResult.action === 'abort') {
+          console.log('\n\x1b[1;31m[getit] Aborting turn and rolling back changes...\x1b[0m');
+          await undoLedger();
+          session.guardrailViolations = [];
+          return;
+        } else if (mitlResult.action === 'ignore') {
+          console.log('\n\x1b[1;33m[getit] Violation ignored by user. Proceeding...\x1b[0m');
+          // Ephemeral ignore - clear violations but don't persist
+          session.guardrailViolations = [];
+        }
+      }
       if (iterationCount > 10) {
         console.log('\n\x1b[1;31m[getit] Safety Halt: Runaway execution prevention triggered (max 10 tool iterations per turn).\x1b[0m');
         break;

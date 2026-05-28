@@ -80,3 +80,36 @@ export async function latestTransaction(): Promise<LedgerTransaction | undefined
   const ledger = await readLedger();
   return ledger.transactions[ledger.transactions.length - 1];
 }
+
+export async function undoLedger(): Promise<void> {
+  const ledger = await readLedger();
+  const tx = ledger.transactions.pop();
+  if (!tx) return;
+
+  // Reverse operations in reverse order
+  for (let i = tx.operations.length - 1; i >= 0; i--) {
+    const op = tx.operations[i];
+    if (op.restorable && op.type.startsWith('file_')) {
+      if (op.existedBefore && op.snapshotPath) {
+        // Restore from snapshot
+        try {
+          const content = await fsp.readFile(op.snapshotPath);
+          await fsp.writeFile(op.path, content);
+          if (op.mode) await fsp.chmod(op.path, op.mode);
+        } catch (err) {
+          console.error(`[ledger] Failed to restore ${op.path}: ${err}`);
+        }
+      } else {
+        // Didn't exist, so delete
+        try {
+          await fsp.unlink(op.path);
+        } catch (err) {
+          console.error(`[ledger] Failed to delete ${op.path}: ${err}`);
+        }
+      }
+    }
+  }
+
+  // Save pruned ledger
+  await fsp.writeFile(getLedgerPath(), JSON.stringify(ledger, null, 2), 'utf-8');
+}

@@ -11,6 +11,8 @@ import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { EventEmitter } from 'node:events';
+import { getRuntimeSession } from '../runtime/session.js';
+import { validateWorkspaceFile } from '../security/guardrail-engine.js';
 
 export type WatchEventType = 'create' | 'modify' | 'delete';
 
@@ -207,6 +209,15 @@ export class WatchDaemon extends EventEmitter {
         // File doesn't exist — it was deleted
         type = 'delete';
         this.knownFiles.delete(relativePath);
+      }
+
+      // v2.0: Architectural Guardrail Validation
+      if (type !== 'delete') {
+        const violations = await validateWorkspaceFile(fullPath, this.rootPath);
+        if (violations.length > 0) {
+          const session = getRuntimeSession();
+          session.guardrailViolations.push(...violations);
+        }
       }
 
       const event: WatchEvent = {

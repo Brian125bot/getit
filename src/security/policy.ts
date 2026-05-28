@@ -1,7 +1,7 @@
-import * as fsp from 'node:fs/promises';
-import * as path from 'node:path';
-import * as os from 'node:os';
-import { PolicyProfile } from '../runtime/session.js';
+import * as fsp from "node:fs/promises";
+import * as path from "node:path";
+import * as os from "node:os";
+import { PolicyProfile } from "../runtime/session.js";
 
 export interface PolicyRule {
   pattern: string;
@@ -14,7 +14,7 @@ export interface LoadedPolicy {
 }
 
 export function getXdgConfigHome(): string {
-  return process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
+  return process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
 }
 
 export async function loadPolicy(startDir: string): Promise<LoadedPolicy> {
@@ -23,41 +23,61 @@ export async function loadPolicy(startDir: string): Promise<LoadedPolicy> {
 
   for (const filePath of await findGetitIgnoreFiles(startDir)) {
     for (const pattern of await readIgnorePatterns(filePath)) {
-      block.push({ pattern: absolutizePattern(pattern, path.dirname(filePath)), source: filePath });
+      block.push({
+        pattern: absolutizePattern(pattern, path.dirname(filePath)),
+        source: filePath,
+      });
     }
   }
 
-  const globalPath = path.join(getXdgConfigHome(), 'getit', 'policy.json');
+  const globalPath = path.join(getXdgConfigHome(), "getit", "policy.json");
   try {
-    const parsed = JSON.parse(await fsp.readFile(globalPath, 'utf-8'));
-    for (const pattern of asStringArray(parsed.block || parsed.blocks || parsed.deny)) {
+    const parsed = JSON.parse(await fsp.readFile(globalPath, "utf-8"));
+    for (const pattern of asStringArray(
+      parsed.block || parsed.blocks || parsed.deny
+    )) {
       block.push({ pattern, source: globalPath });
     }
-    for (const pattern of asStringArray(parsed.allow || parsed.allows || parsed.whitelist)) {
+    for (const pattern of asStringArray(
+      parsed.allow || parsed.allows || parsed.whitelist
+    )) {
       allow.push({ pattern, source: globalPath });
     }
   } catch (err: any) {
-    if (err.code !== 'ENOENT') {
-      block.push({ pattern: '**', source: `${globalPath} (invalid JSON fail-closed)` });
+    if (err.code !== "ENOENT") {
+      block.push({
+        pattern: "**",
+        source: `${globalPath} (invalid JSON fail-closed)`,
+      });
     }
   }
 
   return { block, allow };
 }
 
-export async function evaluatePolicy(targetPath: string, cwd: string, profile: PolicyProfile): Promise<{ allowed: boolean; reason?: string }> {
+export async function evaluatePolicy(
+  targetPath: string,
+  cwd: string,
+  profile: PolicyProfile
+): Promise<{ allowed: boolean; reason?: string }> {
   const policy = await loadPolicy(cwd);
 
   for (const rule of policy.block) {
     if (globMatch(rule.pattern, targetPath)) {
-      return { allowed: false, reason: `Path blocked by policy rule "${rule.pattern}" from ${rule.source}` };
+      return {
+        allowed: false,
+        reason: `Path blocked by policy rule "${rule.pattern}" from ${rule.source}`,
+      };
     }
   }
 
-  if (profile === 'strict') {
+  if (profile === "strict") {
     const base = path.basename(targetPath);
-    if (base.startsWith('.') && base !== '.getitignore') {
-      return { allowed: false, reason: 'Strict policy blocks hidden configuration files.' };
+    if (base.startsWith(".") && base !== ".getitignore") {
+      return {
+        allowed: false,
+        reason: "Strict policy blocks hidden configuration files.",
+      };
     }
   }
 
@@ -68,7 +88,7 @@ async function findGetitIgnoreFiles(startDir: string): Promise<string[]> {
   const files: string[] = [];
   let current = path.resolve(startDir);
   while (true) {
-    const candidate = path.join(current, '.getitignore');
+    const candidate = path.join(current, ".getitignore");
     try {
       await fsp.access(candidate);
       files.unshift(candidate);
@@ -82,31 +102,33 @@ async function findGetitIgnoreFiles(startDir: string): Promise<string[]> {
 
 async function readIgnorePatterns(filePath: string): Promise<string[]> {
   try {
-    const content = await fsp.readFile(filePath, 'utf-8');
+    const content = await fsp.readFile(filePath, "utf-8");
     return content
       .split(/\r?\n/)
       .map((line) => line.trim())
-      .filter((line) => line && !line.startsWith('#'));
+      .filter((line) => line && !line.startsWith("#"));
   } catch {
-    return ['**'];
+    return ["**"];
   }
 }
 
 function asStringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
 }
 
 function absolutizePattern(pattern: string, baseDir: string): string {
   if (path.isAbsolute(pattern)) return pattern;
-  if (pattern.startsWith('/')) return path.join(baseDir, pattern.slice(1));
+  if (pattern.startsWith("/")) return path.join(baseDir, pattern.slice(1));
   return pattern;
 }
 
 export function globMatch(pattern: string, targetPath: string): boolean {
   const normalizedTarget = normalize(targetPath);
   const normalizedPattern = normalize(pattern);
-  if (!normalizedPattern.includes('/')) {
-    const parts = normalizedTarget.split('/');
+  if (!normalizedPattern.includes("/")) {
+    const parts = normalizedTarget.split("/");
     return parts.some((part) => segmentMatch(normalizedPattern, part));
   }
   const regex = globToRegExp(normalizedPattern);
@@ -114,7 +136,7 @@ export function globMatch(pattern: string, targetPath: string): boolean {
 }
 
 function normalize(value: string): string {
-  return value.split(path.sep).join('/');
+  return value.split(path.sep).join("/");
 }
 
 function segmentMatch(pattern: string, value: string): boolean {
@@ -122,21 +144,27 @@ function segmentMatch(pattern: string, value: string): boolean {
 }
 
 function globToRegExp(pattern: string): RegExp {
-  let out = '^';
+  let out = "^";
   for (let i = 0; i < pattern.length; i++) {
     const ch = pattern[i];
     const next = pattern[i + 1];
-    if (ch === '*' && next === '*') {
-      out += '.*';
-      i++;
-    } else if (ch === '*') {
-      out += '[^/]*';
-    } else if (ch === '?') {
-      out += '[^/]';
+    if (ch === "*" && next === "*") {
+      // Handle /**/ or **/ correctly for directory matching
+      if (pattern[i + 2] === "/") {
+        out += "(.*\\/)?";
+        i += 2;
+      } else {
+        out += ".*";
+        i++;
+      }
+    } else if (ch === "*") {
+      out += "[^/]*";
+    } else if (ch === "?") {
+      out += "[^/]";
     } else {
-      out += ch.replace(/[|\\{}()[\]^$+?.]/g, '\\$&');
+      out += ch.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
     }
   }
-  out += '$';
+  out += "$";
   return new RegExp(out);
 }

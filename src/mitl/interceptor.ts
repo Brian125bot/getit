@@ -28,8 +28,9 @@
 import * as readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import { getRuntimeSession } from '../runtime/session.js';
+import { ViolationRecord } from '../security/guardrail-types.js';
 import { scrubText } from '../security/scrubber.js';
-import { getCenterPadding, centerPrompt, centerLine, centerBlock, getBoxChars, stripAnsi } from '../ui/layout.js';
+import { getTerminalWidth, getCenterPadding, centerPrompt, centerLine, centerBlock, getBoxChars, stripAnsi } from '../ui/layout.js';
 
 let rlInstance: readline.Interface | null = null;
 let mockRlInstance: readline.Interface | null = null;
@@ -55,6 +56,7 @@ export function closeReadlineInterface(): void {
 
 export interface InterceptionResult {
   approved: boolean;
+  action?: 'heal' | 'ignore' | 'abort';
   payload: string;
   reason?: string;
   clarifyRequest?: string;
@@ -221,5 +223,72 @@ export async function interceptToolCall(
     }
   } finally {
     session.mitlActive = false;
+  }
+}
+
+export async function renderGuardrailViolationCard(violations: ViolationRecord[]): Promise<InterceptionResult> {
+  const session = getRuntimeSession();
+  const rl = getReadlineInterface();
+  const box = getBoxChars(getTerminalWidth(), true);
+  const cardWidth = 72;
+  const padding = ' '.repeat(getCenterPadding(cardWidth));
+  const horizontalLine = box.h.repeat(cardWidth - 2);
+
+  console.log('\n');
+  // Header: Red (\x1b[31m)
+  console.log(`${padding}\x1b[31m${box.tl}${horizontalLine}${box.tr}\x1b[0m`);
+  console.log(`${padding}\x1b[31m${box.v}\x1b[1;31m 🔴 ARCHITECTURAL GUARDRAIL VIOLATION CRITICAL                          \x1b[0m\x1b[31m${box.v}\x1b[0m`);
+  console.log(`${padding}\x1b[31m${box.ml}${horizontalLine}${box.mr}\x1b[0m`);
+
+  for (const violation of violations) {
+    const lines = [
+      `File: ${violation.filePath}`,
+      `Rule ID: ${violation.ruleId}`,
+      `Description: ${violation.description}`,
+      ``,
+      `Violation Detected on Line ${violation.line}:`,
+      `>> ${violation.lineContent}`,
+      ``,
+      `Remediation: ${violation.remediationHint}`
+    ];
+
+    for (const line of lines) {
+      const { chunk } = sliceVisible(line, cardWidth - 4);
+      const rightPadding = ' '.repeat(Math.max(0, cardWidth - 4 - stripAnsi(chunk).length));
+      console.log(`${padding}\x1b[31m${box.v}\x1b[0m ${chunk}${rightPadding} \x1b[31m${box.v}\x1b[0m`);
+    }
+
+    if (violation !== violations[violations.length - 1]) {
+      console.log(`${padding}\x1b[31m${box.ml}${horizontalLine.replace(/./g, box.mh)}${box.mr}\x1b[0m`);
+    }
+  }
+
+  console.log(`${padding}\x1b[31m${box.ml}${horizontalLine}${box.mr}\x1b[0m`);
+  const options = [
+    `[Y] Acknowledge & Auto-Trigger Agent Healer Loop`,
+    `[i] Ignore Exception (Log Violation to Session)`,
+    `[a] Abort Workspace Turn Execution`
+  ];
+
+  for (const option of options) {
+    const rightPadding = ' '.repeat(cardWidth - 4 - option.length);
+    console.log(`${padding}\x1b[31m${box.v}\x1b[0m ${option}${rightPadding} \x1b[31m${box.v}\x1b[0m`);
+  }
+  console.log(`${padding}\x1b[31m${box.bl}${horizontalLine}${box.br}\x1b[0m`);
+
+  while (true) {
+    const questionPrompt = centerPrompt('\x1b[1;36mSelect Action [Y/i/a] ❯ \x1b[0m');
+    const answer = await rl.question(questionPrompt);
+    const choice = answer.trim().toLowerCase();
+
+    if (choice === 'y' || choice === '') {
+      return { approved: false, payload: '', action: 'heal' };
+    } else if (choice === 'i') {
+      return { approved: true, payload: '', action: 'ignore' };
+    } else if (choice === 'a') {
+      return { approved: false, payload: '', action: 'abort' };
+    } else {
+      console.log(centerLine('\x1b[1;31mInvalid input. Please enter "Y", "i", or "a".\x1b[0m', 47));
+    }
   }
 }

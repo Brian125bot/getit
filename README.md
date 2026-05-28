@@ -175,6 +175,68 @@ Record workflows and replay them:
 @my-deploy
 ```
 
+### Architectural Guardrails (v2.0)
+
+Guardrails enforce structural invariants across your workspace using regex-based
+policy rules. Define rules in `.getit/policy.json` to prevent anti-patterns,
+enforce naming conventions, or block unsafe code patterns.
+
+#### Policy File Format
+
+Create `.getit/policy.json` in your workspace root:
+
+```json
+{
+  "enabled": true,
+  "rules": [
+    {
+      "id": "no-raw-sql",
+      "description": "Forbid raw SQL queries — use query builder instead",
+      "severity": "block",
+      "targetPaths": ["src/services/**/*", "src/db/**/*"],
+      "forbiddenPatterns": ["db\\.query\\(", "executeRawSQL\\("],
+      "allowedPatterns": ["db\\.query\\(\\s*builder", "// TODO: raw-sql-exception"],
+      "remediationHint": "Replace with db.queryBuilder() or RequestContext.query()"
+    },
+    {
+      "id": "no-todo",
+      "description": "TODO comments should include JIRA ticket",
+      "severity": "warn",
+      "targetPaths": ["**/*.ts"],
+      "forbiddenPatterns": ["// TODO(?!.*-\\d{4,})"],
+      "remediationHint": "Add JIRA ticket ID: // TODO-1234: your comment"
+    }
+  ]
+}
+```
+
+#### User Actions on Violation
+
+When a violation is detected:
+
+| Action | Meaning |
+|--------|---------|
+| **[Y]** (default) | **Heal**: Send violation details to agent; re-generate to fix |
+| **[i]** | **Ignore**: Log violation this turn; continue (ephemeral, not persistent) |
+| **[a]** | **Abort**: Discard all changes this turn and roll back via ledger |
+
+#### Rule Configuration
+
+- `id` — Unique rule identifier (for logging/tracking)
+- `description` — Human-readable rule purpose
+- `severity` — `"warn"` (logged, non-blocking) or `"block"` (requires action)
+- `targetPaths` — Glob patterns (e.g., `src/**/*.ts`, `**/*.json`) to apply rule
+- `forbiddenPatterns` — Array of regex patterns to flag as violations
+- `allowedPatterns` — (Optional) Array of regex patterns that exempt lines from violations
+- `remediationHint` — Guidance message shown to agent when healing
+
+#### How It Works
+
+1. **Watch Mode**: File changes are validated against active policy on create/modify
+2. **Agent Loop**: At turn start, blocking violations trigger MITL card
+3. **Healing**: User selects `[Y]` → agent receives violations + hints → re-generates
+4. **Abort & Rollback**: User selects `[a]` → ledger undoes all changes this turn
+
 ## Security Model
 
 - **MITL gate:** Every tool call requires human approval (Y/n/e/c)
