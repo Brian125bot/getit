@@ -61,8 +61,8 @@ export async function dispatchToolCall(name: string, args: any): Promise<ToolDis
 
       const result = await manageFile(action, filePath, content, search, replace);
       
-      // Halts the turn if the action failed (e.g. search block not found, denied, safety exception)
-      const haltTurn = !result.success && !result.clarifyRequest;
+      // Halts the turn if the action was explicitly denied by the user. Let other errors auto-retry.
+      const haltTurn = !result.success && !result.clarifyRequest && (result.error?.includes('denied by user') || false);
 
       return {
         content: JSON.stringify(result),

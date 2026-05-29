@@ -69,7 +69,7 @@ export async function executeBash(command: string, workingDirectory?: string): P
         stdout: '',
         stderr: e.message,
         exitCode: 1,
-        haltTurn: true,
+        haltTurn: false,
         error: e.message
       };
     }
@@ -93,7 +93,7 @@ export async function executeBash(command: string, workingDirectory?: string): P
         stdout: '',
         stderr,
         exitCode: syntaxCheck.status,
-        haltTurn: true,
+        haltTurn: false,
         error: `Bash syntax validation error: ${stderr.trim()}`
       };
     }
@@ -194,7 +194,7 @@ export async function executeBash(command: string, workingDirectory?: string): P
             contextStdout: retryResult.contextStdout,
             contextStderr: retryResult.contextStderr,
             exitCode: retryResult.exitCode,
-            haltTurn: true,
+            haltTurn: false,
             error: `Retry failed. Stderr: ${retryResult.contextStderr || retryResult.stderr}`
           };
         }
@@ -212,7 +212,7 @@ export async function executeBash(command: string, workingDirectory?: string): P
     contextStdout: result.contextStdout,
     contextStderr: result.contextStderr,
     exitCode: result.exitCode,
-    haltTurn: true,
+    haltTurn: false,
     error: `${errMsg}. Stderr: ${result.contextStderr || result.stderr}\n${diagnosticMessage}`
   };
 }
