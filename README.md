@@ -11,7 +11,7 @@ Version 2.0 is a major expansion that transforms getit from a focused CLI agent 
 ### New Modules
 
 | Module | Description |
-|--------|-------------|
+| --- | --- |
 | **Plugin Tool Registry** | Extend getit with custom tools loaded from `.getit/tools/` or `~/.config/getit/tools/` |
 | **Session Memory** | Persistent session history, project detection, and learned user preferences |
 | **Task Recipes** | Record, save, and replay multi-step workflows as YAML recipe files |
@@ -39,11 +39,11 @@ node dist/src/index.js
 
 - **Node.js ≥ 20** (uses native `fs.watch`, `crypto`, `node:test`)
 - **Zero production dependencies** — only Node.js built-ins
-- An API key from [OpenRouter](https://openrouter.ai/) or any OpenAI-compatible provider
+- **API Key** — An API key from [OpenRouter](https://openrouter.ai/) or any OpenAI-compatible provider
 
 ## Architecture
 
-```
+```text
 src/
 ├── agent/              # Core agent loop, prompt builder, tool schemas
 │   ├── loop.ts         # Multi-turn conversation loop with memory injection
@@ -118,7 +118,7 @@ src/
 ## Slash Commands
 
 | Command | Description |
-|---------|-------------|
+| --- | --- |
 | `/help` | Show all available commands |
 | `/exit` | Exit the session |
 | `/clear` | Clear terminal screen |
@@ -175,13 +175,11 @@ Record workflows and replay them:
 @my-deploy
 ```
 
-### Architectural Guardrails (v2.0)
+## Architectural Guardrails
 
-Guardrails enforce structural invariants across your workspace using regex-based
-policy rules. Define rules in `.getit/policy.json` to prevent anti-patterns,
-enforce naming conventions, or block unsafe code patterns.
+Guardrails enforce structural invariants across your workspace using regex-based policy rules. Define rules in `.getit/policy.json` to prevent anti-patterns, enforce naming conventions, or block unsafe code patterns.
 
-#### Policy File Format
+### Policy File Format
 
 Create `.getit/policy.json` in your workspace root:
 
@@ -210,17 +208,17 @@ Create `.getit/policy.json` in your workspace root:
 }
 ```
 
-#### User Actions on Violation
+### User Actions on Violation
 
 When a violation is detected:
 
 | Action | Meaning |
-|--------|---------|
+| --- | --- |
 | **[Y]** (default) | **Heal**: Send violation details to agent; re-generate to fix |
 | **[i]** | **Ignore**: Log violation this turn; continue (ephemeral, not persistent) |
 | **[a]** | **Abort**: Discard all changes this turn and roll back via ledger |
 
-#### Rule Configuration
+### Rule Configuration
 
 - `id` — Unique rule identifier (for logging/tracking)
 - `description` — Human-readable rule purpose
@@ -230,20 +228,20 @@ When a violation is detected:
 - `allowedPatterns` — (Optional) Array of regex patterns that exempt lines from violations
 - `remediationHint` — Guidance message shown to agent when healing
 
-#### How It Works
+### How It Works
 
-1. **Watch Mode**: File changes are validated against active policy on create/modify
-2. **Agent Loop**: At turn start, blocking violations trigger MITL card
-3. **Healing**: User selects `[Y]` → agent receives violations + hints → re-generates
-4. **Abort & Rollback**: User selects `[a]` → ledger undoes all changes this turn
+1. **Watch Mode**: File changes are validated against active policy on create/modify.
+2. **Agent Loop**: At turn start, blocking violations trigger MITL card.
+3. **Healing**: User selects `[Y]` → agent receives violations + hints → re-generates.
+4. **Abort & Rollback**: User selects `[a]` → ledger undoes all changes this turn.
 
 ## Security Model
 
-- **MITL gate:** Every tool call requires human approval (Y/n/e/c)
-- **Secret scrubbing:** Shannon entropy + pattern matching strips secrets from output
-- **Path policies:** Configurable allow/deny lists for file system access
-- **Vault encryption:** AES-256-GCM with PBKDF2 (310,000 iterations) for stored credentials
-- **Plugin sandboxing:** Plugins declare risk levels; high-risk plugins require explicit approval
+- **MITL gate** — Every tool call requires human approval (Y/n/e/c)
+- **Secret scrubbing** — Shannon entropy + pattern matching strips secrets from output
+- **Path policies** — Configurable allow/deny lists for file system access
+- **Vault encryption** — AES-256-GCM with PBKDF2 (310,000 iterations) for stored credentials
+- **Plugin sandboxing** — Plugins declare risk levels; high-risk plugins require explicit approval
 
 ## License
 
